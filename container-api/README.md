@@ -168,11 +168,7 @@ docker compose up --build
 ```
 
 (from the repo root — `docker-compose.yml` lives there; the Dockerfile
-itself is `container-api/Dockerfile`. The Docker build fetches
-[`logGO`](https://github.com/ttfancy/logGO) — container-api's logging
-dependency — as the real published module rather than the local sibling
-checkout `go.mod`'s `replace` points at for day-to-day development; see
-the root README.)
+itself is `container-api/Dockerfile`.)
 
 Two things worth understanding about how this is wired:
 
@@ -260,7 +256,7 @@ make docs
 
 Log data (both container-api's own operational logs and a managed container's
 stdout/stderr) is available over four transports. They all call into the
-exact same service objects (`*logGO.Manager`, `*service.ContainerService`) —
+exact same service objects (`*applog.Manager`, `*service.ContainerService`) —
 this is a difference in wire protocol, not four separate implementations of
 the same feature.
 
@@ -305,7 +301,7 @@ A few things worth knowing about why each one looks the way it does:
   else uses the header.
 - **The WebSocket app-log tail is a genuinely new capability, not just
   another transport for something that already existed.** It's built on
-  `logGO.Manager.RegisterLogHandler` — the exact extension point the
+  `applog.Manager.RegisterLogHandler` — the exact extension point the
   original design called for — bridging live entries into the socket as
   they're written, rather than polling `GET /logs`. That handler must be
   removed when the client disconnects, or it leaks for the life of the
@@ -345,7 +341,7 @@ layer (`internal/handler`), the Connect/gRPC service including a genuine
 round trip through a real HTTP server and generated client for the
 server-streaming RPC (`internal/rpc`), and the WebSocket transports including
 a real Dial/Read round trip and a test that specifically proves a stuck
-client can't stall the shared logGO write-loop (`internal/wsstream`), and
+client can't stall the shared applog write-loop (`internal/wsstream`), and
 the embedded-frontend SPA fallback — proving an unmatched path serves the
 same content as `/` rather than 404ing — without asserting on the specific
 placeholder-vs-real-build content, since which one is embedded depends on

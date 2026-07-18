@@ -11,10 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"contogether/container-api/internal/applog"
 	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/upload"
-	"github.com/ttfancy/logGO"
-	"github.com/ttfancy/logGO/backends/memory"
 )
 
 // fakeRepo is an in-memory upload.Repository, standing in for
@@ -78,8 +77,7 @@ func sequentialIDs() func() string {
 
 func newTestService(t *testing.T) (*upload.Service, *fakeRepo) {
 	t.Helper()
-	store := memory.New()
-	logger := logGO.NewManager(store, store, store)
+	logger := applog.NewMemoryManager()
 	t.Cleanup(func() { logger.Close() })
 	repo := newFakeRepo()
 	return upload.NewService(t.TempDir(), logger, repo, sequentialIDs()), repo

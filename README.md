@@ -1,14 +1,20 @@
 # conTogether
 
-- **[`container-api/`](container-api/README.md)** — a RESTful API for managing per-user Docker containers, built on top of `logGO`.
+- **[`container-api/`](container-api/README.md)** — a RESTful API for managing per-user Docker containers, with its own small operational logger (`internal/applog`).
 - **[`web/`](web/README.md)** — a React dashboard for `container-api`: containers, uploads, and both log views. Not a separate deployable — `container-api` embeds the built output directly into its own binary (`internal/webui`), so it's one process, one port, in production.
 
-The logging system this API is built on — **[`logGO`](https://github.com/ttfancy/logGO)**
-(a dependency-injected, asynchronous logging system with pluggable storage
-backends) — used to live in this repo as an in-module package (`logsys/`),
-but is now its own standalone module/repository, versioned independently.
-`container-api` depends on it like any other external module
-(`github.com/ttfancy/logGO`, see `go.mod`).
+**[`logGO`](https://github.com/ttfancy/logGO)** is a separate, independent
+project — a dependency-injected, asynchronous logging system with pluggable
+storage backends. It used to live in this repo as an in-module package
+(`logsys/`) that `container-api` imported directly; it's since moved out to
+its own repository, and container-api no longer imports it (or anything else
+external) for logging at all — see `container-api/internal/applog`, a small
+self-contained logger built for exactly this API's own needs. The two
+projects still relate, just the other way around now: `logGO` can run as its
+own log-aggregation service that connects to a running conTogether instance
+over the network (its existing `GET /logs` and `/ws/logs` endpoints) and
+displays what it collects on its own UI — see
+[`logGO`'s README](https://github.com/ttfancy/logGO#readme) for that.
 
 ## Requirements
 
@@ -24,32 +30,13 @@ but is now its own standalone module/repository, versioned independently.
 go mod download
 ```
 
-### Working on `logGO` alongside this repo
-
-`go.mod` has a `replace github.com/ttfancy/logGO => ../logGO` for local
-development, so `go build`/`go test` here use a sibling checkout rather than
-the published module — edit both repos together without a tag+push+bump
-round trip in between. Clone it next to this repo:
-
-```bash
-git clone git@github.com:ttfancy/logGO.git ../logGO
-```
-
-Don't have (or don't need) that sibling checkout? Drop the replace and pull
-the real published version instead — this is exactly what the Docker build
-does, since the sibling obviously doesn't exist in that build context:
-
-```bash
-go mod edit -dropreplace=github.com/ttfancy/logGO && go mod tidy
-```
-
 ## Running the tests
 
 ```bash
 go test ./... -race
 ```
 
-Every package builds and passes under the race detector, including the concurrency-control test in `container-api/internal/service`, the async-close test in `container-api/internal/job` (the same pattern `logGO`'s own `Manager.Close` uses — see [that repo](https://github.com/ttfancy/logGO)), and real round-trip tests through actual HTTP/WebSocket servers for the gRPC/Connect and WebSocket log transports (`container-api/internal/rpc`, `container-api/internal/wsstream`) — see [`container-api/README.md#multi-protocol-log-delivery`](container-api/README.md#multi-protocol-log-delivery) for why logs are available over REST, SSE, gRPC/gRPC-Web/Connect, and WebSocket.
+Every package builds and passes under the race detector, including the concurrency-control test in `container-api/internal/service`, the async-close test in `container-api/internal/applog`, and real round-trip tests through actual HTTP/WebSocket servers for the gRPC/Connect and WebSocket log transports (`container-api/internal/rpc`, `container-api/internal/wsstream`) — see [`container-api/README.md#multi-protocol-log-delivery`](container-api/README.md#multi-protocol-log-delivery) for why logs are available over REST, SSE, gRPC/gRPC-Web/Connect, and WebSocket.
 
 ## Running the server
 

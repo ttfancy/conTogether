@@ -12,16 +12,8 @@ RUN npm run build
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+RUN go mod download
 COPY container-api ./container-api
-# go.mod's `replace github.com/ttfancy/logGO => ../logGO` is a local-dev
-# convenience (container-api and logGO as sibling checkouts) — that
-# sibling doesn't exist in this build context, so it's dropped here,
-# falling back to the real tagged module fetched over the network (the
-# repo is public, so this needs no credentials, just internet access).
-# `go mod tidy` (not just `download`) is what actually adds the missing
-# go.sum entry for it, since the committed go.sum never needed one while
-# the replace was active.
-RUN go mod edit -dropreplace=github.com/ttfancy/logGO && go mod tidy
 # go:embed can only reach files inside the embedding .go file's own
 # module subtree — container-api/internal/webui/webui.go embeds
 # ./dist, so the frontend build has to land there before `go build`

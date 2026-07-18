@@ -34,6 +34,7 @@ import (
 	"contogether/container-api/internal/genproto/logsys/v1/logsysv1connect"
 
 	_ "contogether/container-api/docs"
+	"contogether/container-api/internal/applog"
 	"contogether/container-api/internal/config"
 	"contogether/container-api/internal/container"
 	"contogether/container-api/internal/handler"
@@ -45,8 +46,6 @@ import (
 	"contogether/container-api/internal/upload"
 	"contogether/container-api/internal/webui"
 	"contogether/container-api/internal/wsstream"
-	"github.com/ttfancy/logGO"
-	logfile "github.com/ttfancy/logGO/backends/file"
 )
 
 func main() {
@@ -55,11 +54,10 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	logStore, err := logfile.Open(cfg.LogFilePath)
+	logger, err := applog.NewManager(cfg.LogFilePath)
 	if err != nil {
 		log.Fatalf("open log file: %v", err)
 	}
-	logger := logGO.NewManager(logStore, logStore, logStore)
 
 	repos, err := openRepos(cfg)
 	if err != nil {
@@ -148,7 +146,7 @@ func main() {
 			log.Fatalf("server error: %v", err)
 		}
 	}()
-	_ = logger.WriteLog("INFO", "server listening", logGO.F("addr", srv.Addr))
+	_ = logger.WriteLog("INFO", "server listening", applog.F("addr", srv.Addr))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -158,7 +156,7 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		_ = logger.WriteLog("ERROR", "http server shutdown error", logGO.F("error", err.Error()))
+		_ = logger.WriteLog("ERROR", "http server shutdown error", applog.F("error", err.Error()))
 	}
 
 	_ = logger.WriteLog("INFO", "draining in-flight jobs")
@@ -167,7 +165,7 @@ func main() {
 	select {
 	case err := <-jobsDrained:
 		if err != nil {
-			_ = logger.WriteLog("ERROR", "job service shutdown error", logGO.F("error", err.Error()))
+			_ = logger.WriteLog("ERROR", "job service shutdown error", applog.F("error", err.Error()))
 		}
 	case <-time.After(cfg.ShutdownTimeout):
 		// A stuck Docker call must not hang shutdown forever; log and

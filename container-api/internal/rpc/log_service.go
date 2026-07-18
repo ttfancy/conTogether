@@ -13,18 +13,18 @@ import (
 
 	logsysv1 "contogether/container-api/internal/genproto/logsys/v1"
 	"contogether/container-api/internal/middleware"
-	"github.com/ttfancy/logGO"
+	"contogether/container-api/internal/applog"
 )
 
 var errClearLogsRequiresBefore = errors.New("before is required")
 
-// LogQuerier mirrors handler.LogQuerier — the same *logGO.Manager
+// LogQuerier mirrors handler.LogQuerier — the same *applog.Manager
 // backs both the REST and Connect/gRPC transports; this interface is
 // defined again here (rather than imported from the handler package)
 // so this package doesn't depend on the REST layer to describe what it
 // needs.
 type LogQuerier interface {
-	ReadLogs(level string, filter logGO.LogFilter) ([]logGO.LogEntry, error)
+	ReadLogs(level string, filter applog.LogFilter) ([]applog.LogEntry, error)
 	ClearLogs(before time.Time) error
 }
 
@@ -56,7 +56,7 @@ func (h *LogServiceHandler) ReadLogs(ctx context.Context, req *connect.Request[l
 		level = "DEBUG"
 	}
 
-	var filter logGO.LogFilter
+	var filter applog.LogFilter
 	if req.Msg.Since != nil {
 		filter.Since = req.Msg.Since.AsTime()
 	}

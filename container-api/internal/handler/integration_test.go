@@ -16,13 +16,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"contogether/container-api/internal/applog"
 	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/handler"
 	"contogether/container-api/internal/job"
 	"contogether/container-api/internal/middleware"
 	"contogether/container-api/internal/service"
-	"github.com/ttfancy/logGO"
-	"github.com/ttfancy/logGO/backends/memory"
 )
 
 // fakeContainerService is an in-memory handler.ContainerServicer AND
@@ -167,8 +166,7 @@ func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	store := memory.New()
-	logger := logGO.NewManager(store, store, store)
+	logger := applog.NewMemoryManager()
 	t.Cleanup(func() { logger.Close() })
 
 	// Shared between the container handler and the job service's operator —
@@ -405,7 +403,7 @@ func waitForLogEntries(t *testing.T, router http.Handler) []map[string]any {
 }
 
 // TestReadLogsReturnsRequestEntries exercises the real pipeline —
-// middleware.Logging writes through the same logGO.Manager GET /logs
+// middleware.Logging writes through the same applog.Manager GET /logs
 // reads from — not a fake standing in for either side.
 func TestReadLogsReturnsRequestEntries(t *testing.T) {
 	router := newTestRouter(t)

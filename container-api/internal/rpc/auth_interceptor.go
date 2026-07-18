@@ -2,7 +2,7 @@
 // gRPC-Web, and Connect's own JSON protocol — all three from one
 // Connect-generated handler — as an alternative transport to the REST
 // endpoints in internal/handler. Both transports call into the exact
-// same service objects (logGO.Manager, service.ContainerService);
+// same service objects (applog.Manager, service.ContainerService);
 // this package only adapts wire formats, it holds no business logic of
 // its own.
 package rpc

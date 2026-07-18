@@ -10,10 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"contogether/container-api/internal/applog"
 	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/service"
-	"github.com/ttfancy/logGO"
-	"github.com/ttfancy/logGO/backends/memory"
 )
 
 type fakeRepo struct {
@@ -104,10 +103,9 @@ func (d *fakeDocker) StreamLogs(_ context.Context, dockerID, _ string) (io.ReadC
 	return io.NopCloser(strings.NewReader(d.streamContent)), nil
 }
 
-func testLogger(t *testing.T) *logGO.Manager {
+func testLogger(t *testing.T) *applog.Manager {
 	t.Helper()
-	store := memory.New()
-	mgr := logGO.NewManager(store, store, store)
+	mgr := applog.NewMemoryManager()
 	t.Cleanup(func() { mgr.Close() })
 	return mgr
 }
