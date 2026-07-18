@@ -10,10 +10,12 @@ import {
 } from '../api/containers'
 import { ApiError } from '../api/client'
 import { waitForJob } from '../hooks/waitForJob'
+import { useApiKey } from '../hooks/useApiKey'
 import type { Container, Visibility } from '../api/types'
 import StatusBadge from '../components/StatusBadge'
 
 export default function ContainersPage() {
+  const { apiKey } = useApiKey()
   const [containers, setContainers] = useState<Container[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -66,6 +68,10 @@ export default function ContainersPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
+    if (!apiKey.trim()) {
+      window.alert('Enter an API key (top right) before creating a container.')
+      return
+    }
     if (!name.trim() || !image.trim()) return
     setCreating(true)
     try {
