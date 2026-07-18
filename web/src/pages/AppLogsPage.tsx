@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { clearLogs, readLogs } from '../api/logs'
-import { ApiError, wsURL } from '../api/client'
+import { ApiError, missingApiKeyError, wsURL } from '../api/client'
+import { useToast } from '../hooks/useToast'
 import type { LogEntry } from '../api/types'
 
 const LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR']
 
 export default function AppLogsPage() {
+  const { showToast } = useToast()
   const [level, setLevel] = useState('INFO')
   const [contains, setContains] = useState('')
   const [entries, setEntries] = useState<LogEntry[]>([])
@@ -43,23 +45,36 @@ export default function AppLogsPage() {
       socketRef.current = null
       return
     }
+    const missing = missingApiKeyError()
+    if (missing) {
+      showToast(missing.message, 'error')
+      setLive(false)
+      return
+    }
     const socket = new WebSocket(wsURL('/ws/logs'))
     socketRef.current = socket
     socket.onmessage = (event) => {
       const entry = JSON.parse(event.data as string) as LogEntry
       setEntries((prev) => [entry, ...prev])
     }
+    // onerror fires for a genuine connection/auth failure (the server
+    // rejects the handshake outright on an invalid API key); a plain
+    // client-initiated close via the cleanup below only triggers
+    // onclose, never onerror — so this can't misfire just from toggling
+    // the checkbox off.
+    socket.onerror = () => showToast('Live tail connection failed — check your API key.', 'error')
     socket.onclose = () => setLive(false)
     return () => socket.close()
-  }, [live])
+  }, [live, showToast])
 
   async function handleClear() {
     if (!window.confirm('Clear all log entries older than now? This cannot be undone.')) return
     try {
       await clearLogs(new Date().toISOString())
+      showToast('Logs cleared', 'success')
       await search()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to clear logs')
+      showToast(err instanceof ApiError ? err.message : 'Failed to clear logs', 'error')
     }
   }
 

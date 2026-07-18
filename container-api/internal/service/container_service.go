@@ -83,6 +83,14 @@ func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, 
 
 	dockerID, err := s.docker.CreateContainer(ctx, spec)
 	if err != nil {
+		if errors.Is(err, domain.ErrContainerNameConflict) {
+			// Returned bare, not wrapped with the "create docker
+			// container: " prefix below: this message reaches the client
+			// as-is (see middleware.Error), and that prefix is internal
+			// framing a user asking to rename their container has no use
+			// for.
+			return nil, err
+		}
 		return nil, fmt.Errorf("create docker container: %w", err)
 	}
 

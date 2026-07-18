@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/job"
 	"contogether/container-api/internal/service"
 	"contogether/container-api/internal/upload"
@@ -58,6 +59,11 @@ func Error(logger *logsys.Manager) gin.HandlerFunc {
 			// it's a fixed, non-sensitive validation string, not something
 			// derived from SQL/file/driver internals.
 			c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
+		case errors.Is(err, domain.ErrContainerNameConflict):
+			// Same reasoning as ErrInvalidVisibility above: this message
+			// only ever contains the name the client itself submitted, so
+			// echoing it back can't leak anything.
+			c.JSON(http.StatusConflict, errorResponse{Error: err.Error()})
 		case errors.Is(err, job.ErrQueueFull), errors.Is(err, job.ErrClosed):
 			c.JSON(http.StatusServiceUnavailable, errorResponse{Error: "service temporarily unavailable, try again"})
 		default:

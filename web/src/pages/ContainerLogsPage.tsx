@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { wsURL } from '../api/client'
+import { missingApiKeyError, wsURL } from '../api/client'
+import { useToast } from '../hooks/useToast'
 
 type ConnectionState = 'connecting' | 'open' | 'closed'
 
 export default function ContainerLogsPage() {
   const { id } = useParams<{ id: string }>()
+  const { showToast } = useToast()
   const [lines, setLines] = useState<string[]>([])
   const [state, setState] = useState<ConnectionState>('connecting')
   const [closeReason, setCloseReason] = useState<string | null>(null)
@@ -16,6 +18,14 @@ export default function ContainerLogsPage() {
     setLines([])
     setState('connecting')
     setCloseReason(null)
+
+    const missing = missingApiKeyError()
+    if (missing) {
+      setState('closed')
+      setCloseReason(missing.message)
+      showToast(missing.message, 'error')
+      return
+    }
 
     // Live-tails via WebSocket rather than the SSE endpoint the REST API
     // also exposes: a browser's native EventSource can't set custom
@@ -34,10 +44,16 @@ export default function ContainerLogsPage() {
       setState('closed')
       if (event.reason) setCloseReason(event.reason)
     }
-    socket.onerror = () => setState('closed')
+    // A genuine connection/auth failure — not the cleanup-triggered
+    // close below, which only fires onclose — so a toast here always
+    // means something actually went wrong, not just navigating away.
+    socket.onerror = () => {
+      setState('closed')
+      showToast('Log stream connection failed.', 'error')
+    }
 
     return () => socket.close()
-  }, [id])
+  }, [id, showToast])
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })

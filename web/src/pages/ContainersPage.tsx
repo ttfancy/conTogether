@@ -10,12 +10,12 @@ import {
 } from '../api/containers'
 import { ApiError } from '../api/client'
 import { waitForJob } from '../hooks/waitForJob'
-import { useApiKey } from '../hooks/useApiKey'
+import { useToast } from '../hooks/useToast'
 import type { Container, Visibility } from '../api/types'
 import StatusBadge from '../components/StatusBadge'
 
 export default function ContainersPage() {
-  const { apiKey } = useApiKey()
+  const { showToast } = useToast()
   const [containers, setContainers] = useState<Container[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -49,13 +49,28 @@ export default function ContainersPage() {
     refresh()
   }, [refresh])
 
-  async function runAction(id: string, label: string, action: () => Promise<{ id: string }>) {
+  async function runAction(
+    id: string,
+    label: string,
+    pastTense: string,
+    action: () => Promise<{ id: string }>,
+    confirmMessage?: string,
+  ) {
+    if (confirmMessage && !window.confirm(confirmMessage)) return
+
     setPending((p) => ({ ...p, [id]: label }))
     try {
       const job = await action()
-      await waitForJob(job.id, (j) => setPending((p) => ({ ...p, [id]: `${label} (${j.status})` })))
+      const done = await waitForJob(job.id, (j) =>
+        setPending((p) => ({ ...p, [id]: `${label} (${j.status})` })),
+      )
+      if (done.status === 'failed') {
+        showToast(done.error || `Failed to ${label} container`, 'error')
+      } else {
+        showToast(`Container ${pastTense}`, 'success')
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : `Failed to ${label} container`)
+      showToast(err instanceof ApiError ? err.message : `Failed to ${label} container`, 'error')
     } finally {
       setPending((p) => {
         const next = { ...p }
@@ -68,11 +83,10 @@ export default function ContainersPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
-    if (!apiKey.trim()) {
-      window.alert('Enter an API key (top right) before creating a container.')
+    if (!name.trim() || !image.trim()) {
+      showToast('Image and name are both required.', 'error')
       return
     }
-    if (!name.trim() || !image.trim()) return
     setCreating(true)
     try {
       // Wrapped in `sh -c` so the field takes a plain shell command line
@@ -82,9 +96,10 @@ export default function ContainersPage() {
       await createContainer({ image: image.trim(), name: name.trim(), cmd, visibility })
       setName('')
       setCommand('')
+      showToast('Container created', 'success')
       await refresh()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to create container')
+      showToast(err instanceof ApiError ? err.message : 'Failed to create container', 'error')
     } finally {
       setCreating(false)
     }
@@ -95,9 +110,10 @@ export default function ContainersPage() {
     setTogglingVisibility((p) => ({ ...p, [c.id]: true }))
     try {
       await setContainerVisibility(c.id, next)
+      showToast(`Container is now ${next}`, 'success')
       await refresh()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to change visibility')
+      showToast(err instanceof ApiError ? err.message : 'Failed to change visibility', 'error')
     } finally {
       setTogglingVisibility((p) => {
         const copy = { ...p }
@@ -183,20 +199,22 @@ export default function ContainersPage() {
                     <>
                       <button
                         disabled={!!pending[c.id]}
-                        onClick={() => runAction(c.id, 'start', () => startContainer(c.id))}
+                        onClick={() => runAction(c.id, 'start', 'started', () => startContainer(c.id))}
                       >
                         Start
                       </button>
                       <button
                         disabled={!!pending[c.id]}
-                        onClick={() => runAction(c.id, 'stop', () => stopContainer(c.id))}
+                        onClick={() => runAction(c.id, 'stop', 'stopped', () => stopContainer(c.id))}
                       >
                         Stop
                       </button>
                       <button
                         disabled={!!pending[c.id]}
                         className="danger"
-                        onClick={() => runAction(c.id, 'delete', () => deleteContainer(c.id))}
+                        onClick={() =>
+                          runAction(c.id, 'delete', 'deleted', () => deleteContainer(c.id), `Delete "${c.name}"? This cannot be undone.`)
+                        }
                       >
                         Delete
                       </button>

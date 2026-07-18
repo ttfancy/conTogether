@@ -7,10 +7,12 @@ package container
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 
 	"contogether/container-api/internal/domain"
@@ -37,6 +39,14 @@ func (w *DockerWrapper) CreateContainer(ctx context.Context, spec domain.Contain
 		nil, nil, nil, spec.Name,
 	)
 	if err != nil {
+		// A name collision surfaces from the daemon as a 409 Conflict —
+		// translated to a sentinel here (rather than left as a raw Docker
+		// SDK error) so the HTTP layer can map it to a specific, useful
+		// message instead of the generic "internal server error" every
+		// other unrecognized Docker failure gets.
+		if errdefs.IsConflict(err) {
+			return "", fmt.Errorf("%w: %q", domain.ErrContainerNameConflict, spec.Name)
+		}
 		return "", err
 	}
 	return resp.ID, nil

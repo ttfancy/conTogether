@@ -6,9 +6,11 @@ import {
   uploadFile,
 } from '../api/uploads'
 import { ApiError } from '../api/client'
+import { useToast } from '../hooks/useToast'
 import type { Upload, Visibility } from '../api/types'
 
 export default function UploadsPage() {
+  const { showToast } = useToast()
   const [uploads, setUploads] = useState<Upload[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -37,15 +39,19 @@ export default function UploadsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const file = inputRef.current?.files?.[0]
-    if (!file) return
+    if (!file) {
+      showToast('Choose a file first.', 'error')
+      return
+    }
 
     setUploading(true)
     try {
       await uploadFile(file, visibility)
       if (inputRef.current) inputRef.current.value = ''
+      showToast(`Uploaded ${file.name}`, 'success')
       await refresh()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Upload failed')
+      showToast(err instanceof ApiError ? err.message : 'Upload failed', 'error')
     } finally {
       setUploading(false)
     }
@@ -56,9 +62,10 @@ export default function UploadsPage() {
     setTogglingVisibility((p) => ({ ...p, [u.id]: true }))
     try {
       await setUploadVisibility(u.id, next)
+      showToast(`Upload is now ${next}`, 'success')
       await refresh()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to change visibility')
+      showToast(err instanceof ApiError ? err.message : 'Failed to change visibility', 'error')
     } finally {
       setTogglingVisibility((p) => {
         const copy = { ...p }
@@ -73,7 +80,7 @@ export default function UploadsPage() {
     try {
       await downloadUpload(u.id, u.filename)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Download failed')
+      showToast(err instanceof ApiError ? err.message : 'Download failed', 'error')
     } finally {
       setDownloading((p) => {
         const copy = { ...p }

@@ -1,9 +1,14 @@
-import { ApiError, getApiKey, request } from './client'
+import { ApiError, getApiKey, missingApiKeyError, request } from './client'
 import type { Upload, Visibility } from './types'
 
 // Not routed through request() — that helper always sets
 // Content-Type: application/json, which would corrupt a multipart body.
+// Still shares its missing-key check, though, so an upload without a key
+// set fails the same clear way as everything else instead of a raw 401.
 export async function uploadFile(file: File, visibility: Visibility = 'private'): Promise<Upload> {
+  const missing = missingApiKeyError()
+  if (missing) throw missing
+
   const form = new FormData()
   form.append('file', file)
   form.append('visibility', visibility)
@@ -45,6 +50,9 @@ export function setUploadVisibility(id: string, visibility: Visibility): Promise
 // normal navigation — so this fetches the file as a blob and triggers
 // the save via a throwaway object URL instead.
 export async function downloadUpload(id: string, filename: string): Promise<void> {
+  const missing = missingApiKeyError()
+  if (missing) throw missing
+
   const headers = new Headers()
   headers.set('X-API-Key', getApiKey())
 

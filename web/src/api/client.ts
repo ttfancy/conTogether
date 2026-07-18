@@ -22,7 +22,20 @@ export class ApiError extends Error {
   }
 }
 
+// missingApiKeyError is checked before ever touching the network — every
+// request() and the two raw-fetch upload helpers (uploadFile,
+// downloadUpload) call this, so "no API key set" surfaces the same clear
+// message everywhere exactly once, instead of each page independently
+// discovering it via a generic 401 (or, worse, some pages not checking
+// at all).
+export function missingApiKeyError(): ApiError | null {
+  return getApiKey().trim() ? null : new ApiError(401, 'Enter an API key (top right) first.')
+}
+
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const missing = missingApiKeyError()
+  if (missing) throw missing
+
   const headers = new Headers(init.headers)
   headers.set('X-API-Key', getApiKey())
   // Explicit, not just relying on fetch()'s default `Accept: */*`: the
