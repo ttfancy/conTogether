@@ -11,8 +11,8 @@ import (
 
 	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/job"
-	"contogether/logsys"
-	"contogether/logsys/backends/memory"
+	"github.com/ttfancy/logGO"
+	"github.com/ttfancy/logGO/backends/memory"
 )
 
 type recordingOperator struct {
@@ -51,10 +51,10 @@ func (o *recordingOperator) record(slice *[]string, id string) error {
 	return nil
 }
 
-func testLogger(t *testing.T) *logsys.Manager {
+func testLogger(t *testing.T) *logGO.Manager {
 	t.Helper()
 	store := memory.New()
-	mgr := logsys.NewManager(store, store, store)
+	mgr := logGO.NewManager(store, store, store)
 	t.Cleanup(func() { mgr.Close() })
 	return mgr
 }

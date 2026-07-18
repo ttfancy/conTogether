@@ -11,7 +11,7 @@ import (
 	"contogether/container-api/internal/job"
 	"contogether/container-api/internal/service"
 	"contogether/container-api/internal/upload"
-	"contogether/logsys"
+	"github.com/ttfancy/logGO"
 )
 
 type errorResponse struct {
@@ -32,11 +32,11 @@ type errorResponse struct {
 // catches panics from Auth and every handler; the only thing it can no
 // longer protect is a panic inside Logging's own code, which is a much
 // smaller risk than guaranteed-wrong status on every logged error.
-func Error(logger *logsys.Manager) gin.HandlerFunc {
+func Error(logger *logGO.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if r := recover(); r != nil {
-				_ = logger.WriteLog("ERROR", "panic recovered", logsys.F("panic", fmt.Sprintf("%v", r)))
+				_ = logger.WriteLog("ERROR", "panic recovered", logGO.F("panic", fmt.Sprintf("%v", r)))
 				c.AbortWithStatusJSON(http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 			}
 		}()
@@ -47,7 +47,7 @@ func Error(logger *logsys.Manager) gin.HandlerFunc {
 			return
 		}
 		err := c.Errors.Last().Err
-		_ = logger.WriteLog("ERROR", "request error", logsys.F("error", err.Error()))
+		_ = logger.WriteLog("ERROR", "request error", logGO.F("error", err.Error()))
 
 		switch {
 		case errors.Is(err, service.ErrNotFound), errors.Is(err, job.ErrNotFound), errors.Is(err, upload.ErrNotFound):

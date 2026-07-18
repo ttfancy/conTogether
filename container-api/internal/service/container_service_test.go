@@ -12,8 +12,8 @@ import (
 
 	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/service"
-	"contogether/logsys"
-	"contogether/logsys/backends/memory"
+	"github.com/ttfancy/logGO"
+	"github.com/ttfancy/logGO/backends/memory"
 )
 
 type fakeRepo struct {
@@ -104,10 +104,10 @@ func (d *fakeDocker) StreamLogs(_ context.Context, dockerID, _ string) (io.ReadC
 	return io.NopCloser(strings.NewReader(d.streamContent)), nil
 }
 
-func testLogger(t *testing.T) *logsys.Manager {
+func testLogger(t *testing.T) *logGO.Manager {
 	t.Helper()
 	store := memory.New()
-	mgr := logsys.NewManager(store, store, store)
+	mgr := logGO.NewManager(store, store, store)
 	t.Cleanup(func() { mgr.Close() })
 	return mgr
 }

@@ -12,8 +12,8 @@ import (
 
 	"contogether/container-api/internal/middleware"
 	"contogether/container-api/internal/wsstream"
-	"contogether/logsys"
-	"contogether/logsys/backends/memory"
+	"github.com/ttfancy/logGO"
+	"github.com/ttfancy/logGO/backends/memory"
 )
 
 func wsURL(serverURL, path string) string {
@@ -21,7 +21,7 @@ func wsURL(serverURL, path string) string {
 }
 
 func TestServeAppLogsRequiresAuth(t *testing.T) {
-	mgr := logsys.NewManager(memory.New(), memory.New(), memory.New())
+	mgr := logGO.NewManager(memory.New(), memory.New(), memory.New())
 	apiKeys := middleware.MapAPIKeyStore{"owner-1-key": "owner-1"}
 
 	srv := httptest.NewServer(wsstream.ServeAppLogs(mgr, apiKeys))
@@ -44,10 +44,10 @@ func TestServeAppLogsRequiresAuth(t *testing.T) {
 }
 
 // TestServeAppLogsReceivesLiveEntries proves the actual point of this
-// handler: it uses logsys.Manager.RegisterLogHandler to bridge live
+// handler: it uses logGO.Manager.RegisterLogHandler to bridge live
 // entries into the WebSocket, not a poll loop reading GET /logs.
 func TestServeAppLogsReceivesLiveEntries(t *testing.T) {
-	mgr := logsys.NewManager(memory.New(), memory.New(), memory.New())
+	mgr := logGO.NewManager(memory.New(), memory.New(), memory.New())
 	apiKeys := middleware.MapAPIKeyStore{"owner-1-key": "owner-1"}
 
 	srv := httptest.NewServer(wsstream.ServeAppLogs(mgr, apiKeys))
@@ -85,11 +85,11 @@ func TestServeAppLogsReceivesLiveEntries(t *testing.T) {
 
 // TestServeAppLogsDoesNotBlockOtherWrites checks that this client's
 // registered handler doesn't hold up WriteLog for anyone else — the
-// handler is invoked from logsys.Manager's single shared write-loop
+// handler is invoked from logGO.Manager's single shared write-loop
 // goroutine, so a slow/unread WebSocket client must never be allowed to
 // stall it.
 func TestServeAppLogsDoesNotBlockOtherWrites(t *testing.T) {
-	mgr := logsys.NewManager(memory.New(), memory.New(), memory.New())
+	mgr := logGO.NewManager(memory.New(), memory.New(), memory.New())
 	apiKeys := middleware.MapAPIKeyStore{"owner-1-key": "owner-1"}
 
 	srv := httptest.NewServer(wsstream.ServeAppLogs(mgr, apiKeys))

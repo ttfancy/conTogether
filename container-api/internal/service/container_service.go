@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"contogether/container-api/internal/domain"
-	"contogether/logsys"
+	"github.com/ttfancy/logGO"
 )
 
 var (
@@ -56,13 +56,13 @@ type IDGenerator func() string
 type ContainerService struct {
 	repo   ContainerRepository
 	docker DockerClient
-	logger *logsys.Manager
+	logger *logGO.Manager
 	newID  IDGenerator
 
 	locks lockRegistry // per-container-ID mutex, guards start/stop/delete races
 }
 
-func NewContainerService(repo ContainerRepository, docker DockerClient, logger *logsys.Manager, newID IDGenerator) *ContainerService {
+func NewContainerService(repo ContainerRepository, docker DockerClient, logger *logGO.Manager, newID IDGenerator) *ContainerService {
 	return &ContainerService{
 		repo:   repo,
 		docker: docker,
@@ -111,7 +111,7 @@ func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, 
 	}
 
 	_ = s.logger.WriteLog("INFO", "container created",
-		logsys.F("container_id", c.ID), logsys.F("owner_id", ownerID))
+		logGO.F("container_id", c.ID), logGO.F("owner_id", ownerID))
 	return c, nil
 }
 
@@ -174,7 +174,7 @@ func (s *ContainerService) SetVisibility(ctx context.Context, ownerID, id string
 			return fmt.Errorf("update visibility: %w", err)
 		}
 		_ = s.logger.WriteLog("INFO", "container visibility changed",
-			logsys.F("container_id", id), logsys.F("visibility", string(visibility)))
+			logGO.F("container_id", id), logGO.F("visibility", string(visibility)))
 		return nil
 	})
 }
@@ -212,7 +212,7 @@ func (s *ContainerService) StartContainer(ctx context.Context, ownerID, id strin
 		if err := s.repo.UpdateStatus(ctx, id, domain.StatusRunning); err != nil {
 			return fmt.Errorf("update status: %w", err)
 		}
-		_ = s.logger.WriteLog("INFO", "container started", logsys.F("container_id", id))
+		_ = s.logger.WriteLog("INFO", "container started", logGO.F("container_id", id))
 		return nil
 	})
 }
@@ -229,7 +229,7 @@ func (s *ContainerService) StopContainer(ctx context.Context, ownerID, id string
 		if err := s.repo.UpdateStatus(ctx, id, domain.StatusStopped); err != nil {
 			return fmt.Errorf("update status: %w", err)
 		}
-		_ = s.logger.WriteLog("INFO", "container stopped", logsys.F("container_id", id))
+		_ = s.logger.WriteLog("INFO", "container stopped", logGO.F("container_id", id))
 		return nil
 	})
 }
@@ -246,7 +246,7 @@ func (s *ContainerService) DeleteContainer(ctx context.Context, ownerID, id stri
 		if err := s.repo.Delete(ctx, id); err != nil {
 			return fmt.Errorf("delete container record: %w", err)
 		}
-		_ = s.logger.WriteLog("INFO", "container deleted", logsys.F("container_id", id))
+		_ = s.logger.WriteLog("INFO", "container deleted", logGO.F("container_id", id))
 		return nil
 	})
 }

@@ -17,8 +17,8 @@ import (
 	"contogether/container-api/internal/middleware"
 	"contogether/container-api/internal/rpc"
 	"contogether/container-api/internal/service"
-	"contogether/logsys"
-	"contogether/logsys/backends/memory"
+	"github.com/ttfancy/logGO"
+	"github.com/ttfancy/logGO/backends/memory"
 )
 
 type fakeStreamer struct {
@@ -43,15 +43,15 @@ func (f *fakeStreamer) StreamLogs(_ context.Context, ownerID, id, _ string) (io.
 // testManager deliberately does not register a t.Cleanup(Close) — Close
 // is one-time (it closes an internal channel), and tests that need the
 // async write flushed before reading call it explicitly themselves.
-func testManager(t *testing.T) *logsys.Manager {
+func testManager(t *testing.T) *logGO.Manager {
 	t.Helper()
 	store := memory.New()
-	return logsys.NewManager(store, store, store)
+	return logGO.NewManager(store, store, store)
 }
 
 func TestReadLogsConvertsEntries(t *testing.T) {
 	mgr := testManager(t)
-	if err := mgr.WriteLog("INFO", "hello", logsys.F("n", 1.0)); err != nil {
+	if err := mgr.WriteLog("INFO", "hello", logGO.F("n", 1.0)); err != nil {
 		t.Fatalf("WriteLog failed: %v", err)
 	}
 	mgr.Close() // flush the async write before reading it back

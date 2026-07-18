@@ -6,15 +6,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"contogether/logsys"
+	"github.com/ttfancy/logGO"
 )
 
-// LogQuerier is the subset of *logsys.Manager this handler needs —
+// LogQuerier is the subset of *logGO.Manager this handler needs —
 // exposing container-api's own operational log store over HTTP (not to
 // be confused with a managed container's stdout/stderr; see
 // ContainerLogStreamer for that).
 type LogQuerier interface {
-	ReadLogs(level string, filter logsys.LogFilter) ([]logsys.LogEntry, error)
+	ReadLogs(level string, filter logGO.LogFilter) ([]logGO.LogEntry, error)
 	ClearLogs(before time.Time) error
 }
 
@@ -49,7 +49,7 @@ type logEntryResponse struct {
 func (h *LogHandler) ReadLogs(c *gin.Context) {
 	level := c.DefaultQuery("level", "DEBUG")
 
-	var filter logsys.LogFilter
+	var filter logGO.LogFilter
 	if since := c.Query("since"); since != "" {
 		t, err := time.Parse(time.RFC3339, since)
 		if err != nil {

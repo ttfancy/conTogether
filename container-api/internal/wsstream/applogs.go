@@ -9,17 +9,17 @@ import (
 	"github.com/coder/websocket"
 
 	"contogether/container-api/internal/middleware"
-	"contogether/logsys"
+	"github.com/ttfancy/logGO"
 )
 
 const clientBufferSize = 64
 
-// LogRegistrar is the one thing this handler needs from *logsys.Manager
+// LogRegistrar is the one thing this handler needs from *logGO.Manager
 // — the exact extension point the assignment's design called for
 // (RegisterLogHandler, "用於擴展功能"). This is that extension actually
 // used for something: bridging live entries into a WebSocket.
 type LogRegistrar interface {
-	RegisterLogHandler(handler logsys.LogHandler) (unregister func())
+	RegisterLogHandler(handler logGO.LogHandler) (unregister func())
 }
 
 type logEntryJSON struct {
@@ -53,13 +53,13 @@ func ServeAppLogs(registrar LogRegistrar, authStore middleware.APIKeyStore) http
 		ctx := conn.CloseRead(context.Background())
 
 		entries := make(chan logEntryJSON, clientBufferSize)
-		unregister := registrar.RegisterLogHandler(logsys.LogHandlerFunc(func(e logsys.LogEntry) {
+		unregister := registrar.RegisterLogHandler(logGO.LogHandlerFunc(func(e logGO.LogEntry) {
 			msg := logEntryJSON{Timestamp: e.Timestamp(), Level: string(e.Level()), Message: e.Message(), Fields: e.Fields()}
 			select {
 			case entries <- msg:
 			default:
 				// A slow/stuck WS client must not block the shared
-				// logsys write-loop every other log write also goes
+				// logGO write-loop every other log write also goes
 				// through — drop for this client instead.
 			}
 		}))

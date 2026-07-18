@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"contogether/container-api/internal/domain"
-	"contogether/logsys"
+	"github.com/ttfancy/logGO"
 )
 
 var (
@@ -58,12 +58,12 @@ type Repository interface {
 
 type Service struct {
 	rootDir string
-	logger  *logsys.Manager
+	logger  *logGO.Manager
 	repo    Repository
 	newID   func() string
 }
 
-func NewService(rootDir string, logger *logsys.Manager, repo Repository, newID func() string) *Service {
+func NewService(rootDir string, logger *logGO.Manager, repo Repository, newID func() string) *Service {
 	return &Service{rootDir: rootDir, logger: logger, repo: repo, newID: newID}
 }
 
@@ -150,7 +150,7 @@ func (s *Service) Save(ctx context.Context, ownerID, filename string, src io.Rea
 	}
 
 	_ = s.logger.WriteLog("INFO", "file uploaded",
-		logsys.F("owner_id", ownerID), logsys.F("filename", filename), logsys.F("content_type", contentType))
+		logGO.F("owner_id", ownerID), logGO.F("filename", filename), logGO.F("content_type", contentType))
 	return u, nil
 }
 
@@ -198,6 +198,6 @@ func (s *Service) SetVisibility(ctx context.Context, ownerID, id string, visibil
 		return fmt.Errorf("update visibility: %w", err)
 	}
 	_ = s.logger.WriteLog("INFO", "upload visibility changed",
-		logsys.F("upload_id", id), logsys.F("visibility", string(visibility)))
+		logGO.F("upload_id", id), logGO.F("visibility", string(visibility)))
 	return nil
 }

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"contogether/container-api/internal/domain"
-	"contogether/logsys"
+	"github.com/ttfancy/logGO"
 )
 
 var (
@@ -56,13 +56,13 @@ type task struct {
 }
 
 // Service submits jobs to a fixed-size worker pool. Close uses the same
-// RWMutex-guarded channel-close pattern as logsys.Manager: Submit holds
+// RWMutex-guarded channel-close pattern as logGO.Manager: Submit holds
 // RLock for its whole check-then-send, Close takes Lock (which waits
 // out every in-flight Submit) before closing the task channel.
 type Service struct {
 	store    Store
 	operator ContainerOperator
-	logger   *logsys.Manager
+	logger   *logGO.Manager
 	newID    func() string
 
 	tasks chan task
@@ -75,7 +75,7 @@ type Service struct {
 // NewService starts a pool of `workers` goroutines pulling from a queue
 // of size `queueSize`. Submit does not block when the queue is full; it
 // returns ErrQueueFull instead.
-func NewService(store Store, operator ContainerOperator, logger *logsys.Manager, newID func() string, workers, queueSize int) *Service {
+func NewService(store Store, operator ContainerOperator, logger *logGO.Manager, newID func() string, workers, queueSize int) *Service {
 	s := &Service{
 		store:    store,
 		operator: operator,
@@ -163,11 +163,11 @@ func (s *Service) execute(t task) {
 
 	if err != nil {
 		_ = s.store.UpdateStatus(ctx, t.jobID, domain.JobFailed, err.Error())
-		_ = s.logger.WriteLog("ERROR", "job failed", logsys.F("job_id", t.jobID), logsys.F("op", string(t.op)), logsys.F("error", err.Error()))
+		_ = s.logger.WriteLog("ERROR", "job failed", logGO.F("job_id", t.jobID), logGO.F("op", string(t.op)), logGO.F("error", err.Error()))
 		return
 	}
 	_ = s.store.UpdateStatus(ctx, t.jobID, domain.JobDone, "")
-	_ = s.logger.WriteLog("INFO", "job done", logsys.F("job_id", t.jobID), logsys.F("op", string(t.op)))
+	_ = s.logger.WriteLog("INFO", "job done", logGO.F("job_id", t.jobID), logGO.F("op", string(t.op)))
 }
 
 // Close stops accepting new jobs and blocks until every already-queued

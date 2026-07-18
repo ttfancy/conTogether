@@ -13,8 +13,8 @@ import (
 
 	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/upload"
-	"contogether/logsys"
-	"contogether/logsys/backends/memory"
+	"github.com/ttfancy/logGO"
+	"github.com/ttfancy/logGO/backends/memory"
 )
 
 // fakeRepo is an in-memory upload.Repository, standing in for
@@ -79,7 +79,7 @@ func sequentialIDs() func() string {
 func newTestService(t *testing.T) (*upload.Service, *fakeRepo) {
 	t.Helper()
 	store := memory.New()
-	logger := logsys.NewManager(store, store, store)
+	logger := logGO.NewManager(store, store, store)
 	t.Cleanup(func() { logger.Close() })
 	repo := newFakeRepo()
 	return upload.NewService(t.TempDir(), logger, repo, sequentialIDs()), repo
