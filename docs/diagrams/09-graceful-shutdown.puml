@@ -1,0 +1,33 @@
+@startuml
+title Container API - Graceful Shutdown
+
+participant "OS Signal (SIGTERM/SIGINT)" as Signal
+participant Main
+participant "http.Server" as HTTPServer
+participant JobQueue
+participant WorkerPool
+participant LogManager
+
+Signal -> Main: signal received
+activate Main
+Main -> LogManager: WriteLog("INFO", "shutdown initiated")
+Main -> HTTPServer: Shutdown(ctx with timeout)
+activate HTTPServer
+HTTPServer -> HTTPServer: stop accepting new connections
+HTTPServer -> HTTPServer: wait for in-flight HTTP requests to finish
+HTTPServer --> Main: done / ctx timeout
+deactivate HTTPServer
+
+Main -> JobQueue: StopAccepting()
+Main -> WorkerPool: Drain(ctx with timeout)
+activate WorkerPool
+WorkerPool -> WorkerPool: let running jobs finish\n(reject new dequeues)
+WorkerPool --> Main: drained / timeout
+deactivate WorkerPool
+
+Main -> LogManager: Flush() + Close()
+Main -> LogManager: WriteLog("INFO", "shutdown complete")
+Main -> Main: os.Exit(0)
+deactivate Main
+
+@enduml

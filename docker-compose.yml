@@ -1,0 +1,58 @@
+services:
+  container-api:
+    build:
+      context: .
+      dockerfile: container-api/Dockerfile
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      # container-api's own port is fixed at 8080 *inside* the container
+      # (the Dockerfile EXPOSEs it); SERVER_PORT above only controls the
+      # host-side port this is published on. Override other settings
+      # (JOB_WORKERS, DEV_API_KEY, ...) here as needed — see
+      # container-api/README.md#configuration.
+      - DEV_API_KEY=${DEV_API_KEY:-dev-key}
+      # Defaults to SQLite (a file under the volume below). Switch to the
+      # optional postgres service instead:
+      #   docker compose --profile postgres up --build
+      - DB_DRIVER=${DB_DRIVER:-sqlite}
+      - DATABASE_URL=${DATABASE_URL:-postgres://contogether:contogether@postgres:5432/contogether?sslmode=disable}
+    depends_on:
+      # required: false — a no-op when the postgres profile isn't active,
+      # so this doesn't force postgres to start for the SQLite default.
+      # When it IS active, wait for its healthcheck so container-api
+      # doesn't try to connect before Postgres accepts connections.
+      postgres:
+        condition: service_healthy
+        required: false
+    volumes:
+      # Sibling-containers pattern: this lets container-api talk to the
+      # *host's* Docker daemon to manage other containers, rather than
+      # running a nested daemon inside its own container.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persists the SQLite DB, log file, and uploads across restarts
+      # (all default to paths relative to /data, the image's WORKDIR).
+      - container-api-data:/data
+
+  # Opt-in: `docker compose --profile postgres up --build` starts this
+  # alongside container-api and points DB_DRIVER/DATABASE_URL at it.
+  # Without the profile flag, this never starts and container-api falls
+  # back to its SQLite default.
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=contogether
+      - POSTGRES_PASSWORD=contogether
+      - POSTGRES_DB=contogether
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contogether"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  container-api-data:
+  postgres-data:

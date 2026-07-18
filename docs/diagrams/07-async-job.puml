@@ -1,0 +1,39 @@
+@startuml
+title Container API - Async Job Processing (e.g. long-running container op)
+
+actor Client
+participant JobHandler
+participant JobService
+participant JobQueue
+participant WorkerPool
+participant ContainerService
+participant LogManager
+
+Client -> JobHandler: POST /containers/{id}/start
+JobHandler -> JobService: SubmitJob(op="start", containerID)
+activate JobService
+JobService -> JobService: create Job{ID: uuid, status="pending"}
+JobService -> JobQueue: enqueue(job)
+JobService --> JobHandler: Job{ID}
+deactivate JobService
+JobHandler --> Client: 202 Accepted {jobId}
+
+== Background processing ==
+activate WorkerPool
+WorkerPool -> JobQueue: dequeue(job)
+WorkerPool -> WorkerPool: mark job status="running"
+WorkerPool -> ContainerService: StartContainer(containerID)
+activate ContainerService
+ContainerService --> WorkerPool: ok / error
+deactivate ContainerService
+WorkerPool -> WorkerPool: mark job status="done" / "failed"
+WorkerPool -> LogManager: WriteLog("INFO"/"ERROR", job result)
+deactivate WorkerPool
+
+== Client polls for result ==
+Client -> JobHandler: GET /jobs/{jobId}
+JobHandler -> JobService: GetJobStatus(jobId)
+JobService --> JobHandler: Job{status, result/error}
+JobHandler --> Client: 200 {status, result}
+
+@enduml

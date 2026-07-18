@@ -1,0 +1,14 @@
+*.db
+*.log
+/container-api/cmd/server/uploads/
+
+# Built frontend, copied into internal/webui/dist by `make frontend` /
+# the Dockerfile for go:embed to pick up (see internal/webui/webui.go).
+# index.html itself stays tracked as a placeholder so `go build`/`go
+# test` work without Node installed — everything else here is a
+# generated build artifact.
+/container-api/internal/webui/dist/*
+!/container-api/internal/webui/dist/index.html
+
+/web/node_modules/
+/web/dist/

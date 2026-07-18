@@ -1,0 +1,348 @@
+basePath: /
+definitions:
+  internal_handler.containerResponse:
+    properties:
+      id:
+        type: string
+      image:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+    type: object
+  internal_handler.createContainerRequest:
+    properties:
+      cmd:
+        items:
+          type: string
+        type: array
+      env:
+        items:
+          type: string
+        type: array
+      image:
+        type: string
+      name:
+        type: string
+    required:
+    - image
+    - name
+    type: object
+  internal_handler.jobResponse:
+    properties:
+      error:
+        type: string
+      id:
+        type: string
+      status:
+        type: string
+    type: object
+  internal_handler.logEntryResponse:
+    properties:
+      fields:
+        additionalProperties: {}
+        type: object
+      level:
+        type: string
+      message:
+        type: string
+      timestamp:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: RESTful API for managing per-user Docker containers, file uploads,
+    and async job status.
+  title: conTogether Container API
+  version: "1.0"
+paths:
+  /containers:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_handler.containerResponse'
+            type: array
+      security:
+      - ApiKeyAuth: []
+      summary: List the authenticated owner's containers
+      tags:
+      - containers
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Container spec
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.createContainerRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_handler.containerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Create a container
+      tags:
+      - containers
+  /containers/{id}:
+    delete:
+      description: Submits a delete job and returns immediately; poll GET /jobs/{jobId}
+        for completion.
+      parameters:
+      - description: Container ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/internal_handler.jobResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a container (asynchronous)
+      tags:
+      - containers
+    get:
+      parameters:
+      - description: Container ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.containerResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get a container
+      tags:
+      - containers
+  /containers/{id}/logs/stream:
+    get:
+      description: Server-Sent Events stream of the container's own log output, backfilling
+        `tail` recent lines then following new output as it's written.
+      parameters:
+      - description: Container ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Number of recent lines to backfill (default 100)
+        in: query
+        name: tail
+        type: string
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: OK
+      security:
+      - ApiKeyAuth: []
+      summary: Live-tail a container's stdout/stderr
+      tags:
+      - containers
+  /containers/{id}/start:
+    post:
+      description: Submits a start job and returns immediately; poll GET /jobs/{jobId}
+        for completion.
+      parameters:
+      - description: Container ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/internal_handler.jobResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Start a container (asynchronous)
+      tags:
+      - containers
+  /containers/{id}/stop:
+    post:
+      description: Submits a stop job and returns immediately; poll GET /jobs/{jobId}
+        for completion.
+      parameters:
+      - description: Container ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/internal_handler.jobResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Stop a container (asynchronous)
+      tags:
+      - containers
+  /jobs/{jobId}:
+    get:
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.jobResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Get job status
+      tags:
+      - jobs
+  /logs:
+    delete:
+      parameters:
+      - description: RFC3339 timestamp; entries strictly before this are removed
+        in: query
+        name: before
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Delete operational log entries older than a cutoff
+      tags:
+      - logs
+    get:
+      description: Returns log entries at or above `level` (default DEBUG = everything),
+        optionally filtered by time range and message substring.
+      parameters:
+      - description: 'Minimum level: DEBUG, INFO, WARN, ERROR'
+        in: query
+        name: level
+        type: string
+      - description: RFC3339 timestamp, inclusive lower bound
+        in: query
+        name: since
+        type: string
+      - description: RFC3339 timestamp, inclusive upper bound
+        in: query
+        name: until
+        type: string
+      - description: Substring match against the log message
+        in: query
+        name: contains
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_handler.logEntryResponse'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Query container-api's own operational logs
+      tags:
+      - logs
+  /uploads:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: File to upload
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Upload a data file (CSV/JSON/image/code) to the user's folder
+      tags:
+      - uploads
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-API-Key
+    type: apiKey
+swagger: "2.0"

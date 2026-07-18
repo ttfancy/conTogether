@@ -1,0 +1,13 @@
+docs/
+**/*.md
+**/*.db
+**/*.log
+container-api/cmd/server/uploads/
+.claude/
+web/node_modules/
+web/dist/
+# The Docker build always produces a fresh frontend build and copies it
+# in (see Dockerfile's frontend stage) before compiling, so neither the
+# checked-in placeholder nor any locally-built output here needs to be
+# in the build context at all.
+container-api/internal/webui/dist/

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>conTogether — frontend not built</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; max-width: 640px; margin: 80px auto; line-height: 1.6;">
+    <h1>Frontend not built</h1>
+    <p>
+      This is a placeholder. <code>go build</code>/<code>go test</code> work fine without it (that's
+      the point — a pure-backend contributor shouldn't need Node installed), but to serve the real
+      React UI here, build it first:
+    </p>
+    <pre>make frontend</pre>
+    <p>
+      or just use Docker, which always builds it fresh:
+      <code>docker compose up --build</code>
+    </p>
+  </body>
+</html>

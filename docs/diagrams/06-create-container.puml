@@ -1,0 +1,26 @@
+@startuml
+title Container API - Create Container (Synchronous Path)
+
+actor Client
+participant ContainerHandler
+participant ContainerService
+participant ContainerRepository
+participant DockerClientWrapper
+participant LogManager
+
+Client -> ContainerHandler: POST /containers {image, name, ...}
+ContainerHandler -> ContainerHandler: bind & validate request body
+ContainerHandler -> ContainerService: CreateContainer(ctx, spec)
+activate ContainerService
+ContainerService -> DockerClientWrapper: CreateContainer(spec)
+activate DockerClientWrapper
+DockerClientWrapper -> DockerClientWrapper: docker SDK ContainerCreate()
+DockerClientWrapper --> ContainerService: containerID
+deactivate DockerClientWrapper
+ContainerService -> ContainerRepository: Save(record{containerID, owner, status="created"})
+ContainerService -> LogManager: WriteLog("INFO", "container created")
+ContainerService --> ContainerHandler: ContainerDTO
+deactivate ContainerService
+ContainerHandler --> Client: 201 Created {id, status}
+
+@enduml

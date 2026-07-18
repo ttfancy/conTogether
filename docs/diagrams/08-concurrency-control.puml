@@ -1,0 +1,43 @@
+@startuml
+title Container API - Concurrency Control (prevent conflicting ops on same container)
+
+actor "Client A" as A
+actor "Client B" as B
+participant ContainerService
+participant "Per-Container Lock\n(sync.Mutex / DB row lock)" as Lock
+participant DockerClientWrapper
+participant LogManager
+
+A -> ContainerService: DeleteContainer(id)
+activate ContainerService
+ContainerService -> Lock: Acquire(id)
+activate Lock
+Lock --> ContainerService: acquired
+
+B -> ContainerService: StartContainer(id)
+note right of B: concurrent request for the same container ID
+activate ContainerService #LightGray
+ContainerService -> Lock: Acquire(id)
+note right: blocks until A's operation\nreleases the lock for this container ID
+
+ContainerService -> DockerClientWrapper: ContainerRemove(id)
+DockerClientWrapper --> ContainerService: ok
+ContainerService -> Lock: Release(id)
+deactivate Lock
+ContainerService -> LogManager: WriteLog("INFO", "container deleted")
+ContainerService --> A: 200 OK
+deactivate ContainerService
+
+Lock --> ContainerService: acquired (B's turn)
+ContainerService -> ContainerService: re-check container state
+alt container no longer exists
+  ContainerService --> B: 409 Conflict "container was deleted"
+else exists
+  ContainerService -> DockerClientWrapper: ContainerStart(id)
+  DockerClientWrapper --> ContainerService: ok
+  ContainerService --> B: 200 OK
+end
+ContainerService -> Lock: Release(id)
+deactivate ContainerService
+
+@enduml

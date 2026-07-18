@@ -1,0 +1,76 @@
+@startuml
+title Container API - Component / Layer Overview
+
+package "cmd/server" {
+  [main.go] as Main
+}
+
+package "internal/middleware" {
+  [AuthMiddleware]
+  [LoggingMiddleware]
+  [ErrorMiddleware]
+}
+
+package "internal/handler" {
+  [ContainerHandler]
+  [UploadHandler]
+  [JobHandler]
+}
+
+package "internal/service" {
+  [ContainerService]
+  [UploadService]
+  [JobService]
+}
+
+package "internal/repository" {
+  interface ContainerRepository
+  [SQLiteContainerRepo]
+  [PostgresContainerRepo]
+}
+
+package "internal/container" {
+  [DockerClientWrapper]
+}
+
+package "internal/job" {
+  [JobQueue]
+  [WorkerPool]
+}
+
+package "logsys" {
+  [LogManager]
+}
+
+Main --> AuthMiddleware
+Main --> LoggingMiddleware
+Main --> ErrorMiddleware
+Main --> ContainerHandler
+Main --> UploadHandler
+Main --> JobHandler
+
+LoggingMiddleware --> LogManager : WriteLog(...)
+
+ContainerHandler --> ContainerService
+UploadHandler --> UploadService
+JobHandler --> JobService
+
+ContainerService --> ContainerRepository
+ContainerService --> DockerClientWrapper
+ContainerService --> JobQueue : enqueue long-running ops
+
+JobService --> JobQueue
+JobQueue --> WorkerPool
+WorkerPool --> ContainerService : execute deferred op
+WorkerPool --> LogManager : progress / error logs
+
+ContainerRepository <|.. SQLiteContainerRepo
+ContainerRepository <|.. PostgresContainerRepo
+
+note bottom of ContainerRepository
+  Abstract data-access interface —
+  swappable backend (SQLite <-> Postgres)
+  satisfies the DB-abstraction requirement.
+end note
+
+@enduml

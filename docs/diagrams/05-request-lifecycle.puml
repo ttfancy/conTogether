@@ -1,0 +1,67 @@
+@startuml
+title Container API - Request Lifecycle (Middleware Chain)
+
+actor Client
+participant "Gin Router" as Router
+participant LoggingMiddleware
+participant ErrorMiddleware
+participant AuthMiddleware
+participant Handler
+participant Service
+participant "Repository / Docker" as Backend
+participant LogManager
+
+Client -> Router: HTTP request
+Router -> LoggingMiddleware: enter
+activate LoggingMiddleware
+LoggingMiddleware -> LogManager: WriteLog("INFO", "request start")
+LoggingMiddleware -> ErrorMiddleware: next() (deferred recover wraps everything below)
+activate ErrorMiddleware
+ErrorMiddleware -> AuthMiddleware: next()
+activate AuthMiddleware
+AuthMiddleware -> AuthMiddleware: validate token / API key
+alt unauthorized
+  AuthMiddleware --> ErrorMiddleware: 401
+else authorized
+  AuthMiddleware -> Handler: next()
+  activate Handler
+  Handler -> Service: call business method
+  activate Service
+  Service -> Backend: persist / mutate
+  Backend --> Service: result
+  Service --> Handler: result / error (via c.Error(err))
+  deactivate Service
+  Handler --> AuthMiddleware: response
+  deactivate Handler
+  AuthMiddleware --> ErrorMiddleware: response
+  deactivate AuthMiddleware
+end
+alt panic occurred anywhere downstream
+  ErrorMiddleware -> LogManager: WriteLog("ERROR", recovered panic)
+  ErrorMiddleware -> ErrorMiddleware: write 500 (structured error body)
+else c.Errors non-empty
+  ErrorMiddleware -> LogManager: WriteLog("ERROR", "request error")
+  ErrorMiddleware -> ErrorMiddleware: map error -> real status (404/403/503/500)
+else normal
+  ErrorMiddleware -> ErrorMiddleware: leave handler's response as-is
+end
+ErrorMiddleware --> LoggingMiddleware: response (status now final)
+deactivate ErrorMiddleware
+LoggingMiddleware -> LogManager: WriteLog("INFO", "request end", status=c.Writer.Status())
+LoggingMiddleware --> Client: response
+deactivate LoggingMiddleware
+
+note right of LoggingMiddleware
+  Logging must be OUTERMOST (registered
+  before Error), not the reverse: it reads
+  c.Writer.Status() after c.Next() returns,
+  so Error's status-writing has to happen
+  *before* control comes back to Logging.
+  Registering Error first (as an earlier
+  version of this app did) logs every
+  c.Error()-routed response as 200 — the
+  client still gets the correct 404/403/etc,
+  but the *logged* status is wrong.
+end note
+
+@enduml
