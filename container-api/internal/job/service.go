@@ -25,11 +25,15 @@ var (
 
 // ContainerOperator is the subset of service.ContainerService a worker
 // needs to actually execute a job. service.ContainerService satisfies
-// this without either package importing the other. GetContainer is used
-// by Submit itself (see below) to fail fast on ownership/existence
-// errors rather than only surfacing them later as a job failure.
+// this without either package importing the other. MustOwnContainer is
+// used by Submit itself (see below) to fail fast on ownership/existence
+// errors rather than only surfacing them later as a job failure —
+// deliberately the strict owner-only check (service.ContainerService's
+// exported MustOwnContainer), not the public-readable GetContainer:
+// visibility grants read access to someone else's container, never the
+// right to start/stop/delete it.
 type ContainerOperator interface {
-	GetContainer(ctx context.Context, ownerID, containerID string) (*domain.Container, error)
+	MustOwnContainer(ctx context.Context, ownerID, containerID string) (*domain.Container, error)
 	StartContainer(ctx context.Context, ownerID, containerID string) error
 	StopContainer(ctx context.Context, ownerID, containerID string) error
 	DeleteContainer(ctx context.Context, ownerID, containerID string) error
@@ -88,11 +92,11 @@ func NewService(store Store, operator ContainerOperator, logger *logsys.Manager,
 
 // Submit persists a pending Job and enqueues it for background
 // execution, returning immediately. Ownership/existence errors are
-// checked synchronously here (via GetContainer) and returned directly —
-// they're already known at submission time, so burying them in an async
-// job failure would only make the client poll to learn what Submit
-// could have told it up front. Only the actual container operation is
-// asynchronous.
+// checked synchronously here (via MustOwnContainer) and returned
+// directly — they're already known at submission time, so burying them
+// in an async job failure would only make the client poll to learn what
+// Submit could have told it up front. Only the actual container
+// operation is asynchronous.
 func (s *Service) Submit(ctx context.Context, ownerID, containerID string, op domain.JobOp) (*domain.Job, error) {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
@@ -100,7 +104,7 @@ func (s *Service) Submit(ctx context.Context, ownerID, containerID string, op do
 		return nil, ErrClosed
 	}
 
-	if _, err := s.operator.GetContainer(ctx, ownerID, containerID); err != nil {
+	if _, err := s.operator.MustOwnContainer(ctx, ownerID, containerID); err != nil {
 		return nil, err
 	}
 

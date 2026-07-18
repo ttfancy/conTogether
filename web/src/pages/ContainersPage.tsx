@@ -4,12 +4,13 @@ import {
   createContainer,
   deleteContainer,
   listContainers,
+  setContainerVisibility,
   startContainer,
   stopContainer,
 } from '../api/containers'
 import { ApiError } from '../api/client'
 import { waitForJob } from '../hooks/waitForJob'
-import type { Container } from '../api/types'
+import type { Container, Visibility } from '../api/types'
 import StatusBadge from '../components/StatusBadge'
 
 export default function ContainersPage() {
@@ -23,7 +24,12 @@ export default function ContainersPage() {
   const [image, setImage] = useState('alpine')
   const [name, setName] = useState('')
   const [command, setCommand] = useState('')
+  const [visibility, setVisibility] = useState<Visibility>('private')
   const [creating, setCreating] = useState(false)
+  // Per-container "visibility toggle in flight" — separate from
+  // `pending` (job-based start/stop/delete), since this is a plain
+  // synchronous request, not a job to poll.
+  const [togglingVisibility, setTogglingVisibility] = useState<Record<string, boolean>>({})
 
   const refresh = useCallback(async () => {
     try {
@@ -67,7 +73,7 @@ export default function ContainersPage() {
       // (pipes, loops, quoting — whatever you'd type in a terminal)
       // rather than requiring the backend's exec-form []string directly.
       const cmd = command.trim() ? ['sh', '-c', command.trim()] : undefined
-      await createContainer({ image: image.trim(), name: name.trim(), cmd })
+      await createContainer({ image: image.trim(), name: name.trim(), cmd, visibility })
       setName('')
       setCommand('')
       await refresh()
@@ -75,6 +81,23 @@ export default function ContainersPage() {
       setError(err instanceof ApiError ? err.message : 'Failed to create container')
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function toggleVisibility(c: Container) {
+    const next: Visibility = c.visibility === 'public' ? 'private' : 'public'
+    setTogglingVisibility((p) => ({ ...p, [c.id]: true }))
+    try {
+      await setContainerVisibility(c.id, next)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to change visibility')
+    } finally {
+      setTogglingVisibility((p) => {
+        const copy = { ...p }
+        delete copy[c.id]
+        return copy
+      })
     }
   }
 
@@ -95,6 +118,10 @@ export default function ContainersPage() {
           placeholder='command (optional, e.g. while true; do echo hi; sleep 1; done)'
           className="command-input"
         />
+        <select value={visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}>
+          <option value="private">private</option>
+          <option value="public">public</option>
+        </select>
         <button type="submit" disabled={creating}>
           {creating ? 'Creating…' : 'Create container'}
         </button>
@@ -112,7 +139,9 @@ export default function ContainersPage() {
             <tr>
               <th>Name</th>
               <th>Image</th>
+              <th>Owner</th>
               <th>Status</th>
+              <th>Visibility</th>
               <th>Logs</th>
               <th>Actions</th>
             </tr>
@@ -122,32 +151,53 @@ export default function ContainersPage() {
               <tr key={c.id}>
                 <td>{c.name}</td>
                 <td>{c.image}</td>
+                <td>{c.is_owner ? 'you' : c.owner_id}</td>
                 <td>
                   <StatusBadge status={pending[c.id] ?? c.status} />
+                </td>
+                <td>
+                  {c.is_owner ? (
+                    <button
+                      className="visibility-toggle"
+                      disabled={!!togglingVisibility[c.id]}
+                      onClick={() => toggleVisibility(c)}
+                      title="Click to toggle — public containers are readable by anyone, but only you can start/stop/delete them"
+                    >
+                      {c.visibility}
+                    </button>
+                  ) : (
+                    <span className="muted">{c.visibility}</span>
+                  )}
                 </td>
                 <td>
                   <Link to={`/containers/${c.id}/logs`}>view</Link>
                 </td>
                 <td className="row-actions">
-                  <button
-                    disabled={!!pending[c.id]}
-                    onClick={() => runAction(c.id, 'start', () => startContainer(c.id))}
-                  >
-                    Start
-                  </button>
-                  <button
-                    disabled={!!pending[c.id]}
-                    onClick={() => runAction(c.id, 'stop', () => stopContainer(c.id))}
-                  >
-                    Stop
-                  </button>
-                  <button
-                    disabled={!!pending[c.id]}
-                    className="danger"
-                    onClick={() => runAction(c.id, 'delete', () => deleteContainer(c.id))}
-                  >
-                    Delete
-                  </button>
+                  {c.is_owner ? (
+                    <>
+                      <button
+                        disabled={!!pending[c.id]}
+                        onClick={() => runAction(c.id, 'start', () => startContainer(c.id))}
+                      >
+                        Start
+                      </button>
+                      <button
+                        disabled={!!pending[c.id]}
+                        onClick={() => runAction(c.id, 'stop', () => stopContainer(c.id))}
+                      >
+                        Stop
+                      </button>
+                      <button
+                        disabled={!!pending[c.id]}
+                        className="danger"
+                        onClick={() => runAction(c.id, 'delete', () => deleteContainer(c.id))}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  ) : (
+                    <span className="muted">view only</span>
+                  )}
                 </td>
               </tr>
             ))}

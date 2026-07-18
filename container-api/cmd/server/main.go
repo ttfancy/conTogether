@@ -61,11 +61,19 @@ func main() {
 	}
 	logger := logsys.NewManager(logStore, logStore, logStore)
 
-	containerRepo, closeRepo, err := openContainerRepo(cfg)
+	repos, err := openRepos(cfg)
 	if err != nil {
-		log.Fatalf("open container repository: %v", err)
+		log.Fatalf("open repositories: %v", err)
 	}
-	defer closeRepo.Close()
+	defer repos.closer.Close()
+
+	// The dev API key is a placeholder identity — see config.Config's
+	// DevAPIKey doc comment — but it's now seeded into the same
+	// api_keys table a real key-issuing flow would use, not just an
+	// in-memory map, so OwnerForKey lookups are identical either way.
+	if err := repos.apiKeys.Seed(cfg.DevAPIKey, "dev-user"); err != nil {
+		log.Fatalf("seed dev API key: %v", err)
+	}
 
 	dockerClient, err := container.NewDockerWrapper()
 	if err != nil {
@@ -73,24 +81,22 @@ func main() {
 	}
 	defer dockerClient.Close()
 
-	containerSvc := service.NewContainerService(containerRepo, dockerClient, logger, func() string {
-		return uuid.NewString()
-	})
-	uploadSvc := upload.NewService(cfg.UploadsDir, logger)
+	newID := func() string { return uuid.NewString() }
+
+	containerSvc := service.NewContainerService(repos.container, dockerClient, logger, newID)
+	uploadSvc := upload.NewService(cfg.UploadsDir, logger, repos.uploads, newID)
 
 	// containerSvc satisfies job.ContainerOperator structurally (Start/
 	// Stop/DeleteContainer) — jobSvc is what actually executes an async
 	// container operation once a worker picks it off the queue.
-	jobSvc := job.NewService(job.NewMemoryStore(), containerSvc, logger, func() string {
-		return uuid.NewString()
-	}, cfg.JobWorkers, cfg.JobQueueSize)
+	jobSvc := job.NewService(job.NewMemoryStore(), containerSvc, logger, newID, cfg.JobWorkers, cfg.JobQueueSize)
 
 	containerHandler := handler.NewContainerHandler(containerSvc, containerSvc)
 	uploadHandler := handler.NewUploadHandler(uploadSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
 	logHandler := handler.NewLogHandler(logger)
 
-	apiKeys := middleware.MapAPIKeyStore{cfg.DevAPIKey: "dev-user"}
+	apiKeys := repos.apiKeys
 
 	router := gin.New()
 	router.Use(middleware.Logging(logger), middleware.Error(logger))
@@ -173,21 +179,56 @@ func main() {
 	logger.Close()
 }
 
-// openContainerRepo constructs the configured service.ContainerRepository
-// backend — cfg.DBDriver ("sqlite" or "postgres", validated by
-// config.Load) is branched on here and nowhere else; everything
-// downstream only ever sees the interface.
-func openContainerRepo(cfg *config.Config) (service.ContainerRepository, io.Closer, error) {
+// repos bundles every repository the server needs, all sharing one
+// underlying *sql.DB connection (see ContainerRepository.DB()) rather
+// than each opening its own — one file/DSN, one pool, no risk of a
+// second SQLite connection contending with the first over the same
+// database file.
+type repos struct {
+	container service.ContainerRepository
+	apiKeys   *repository.APIKeyRepo
+	uploads   upload.Repository
+	closer    io.Closer
+}
+
+// openRepos constructs every repository for the configured backend —
+// cfg.DBDriver ("sqlite" or "postgres", validated by config.Load) is
+// branched on here and nowhere else; everything downstream only ever
+// sees interfaces.
+func openRepos(cfg *config.Config) (*repos, error) {
 	if cfg.DBDriver == "postgres" {
-		repo, err := repository.NewPostgresContainerRepo(cfg.DatabaseURL)
+		containerRepo, err := repository.NewPostgresContainerRepo(cfg.DatabaseURL)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		return repo, repo, nil
+		db := containerRepo.DB()
+		apiKeyRepo, err := repository.NewAPIKeyRepo(db, "postgres")
+		if err != nil {
+			containerRepo.Close()
+			return nil, err
+		}
+		uploadRepo, err := repository.NewPostgresUploadRepo(db)
+		if err != nil {
+			containerRepo.Close()
+			return nil, err
+		}
+		return &repos{container: containerRepo, apiKeys: apiKeyRepo, uploads: uploadRepo, closer: containerRepo}, nil
 	}
-	repo, err := repository.NewSQLiteContainerRepo(cfg.DBPath)
+
+	containerRepo, err := repository.NewSQLiteContainerRepo(cfg.DBPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return repo, repo, nil
+	db := containerRepo.DB()
+	apiKeyRepo, err := repository.NewAPIKeyRepo(db, "sqlite")
+	if err != nil {
+		containerRepo.Close()
+		return nil, err
+	}
+	uploadRepo, err := repository.NewSQLiteUploadRepo(db)
+	if err != nil {
+		containerRepo.Close()
+		return nil, err
+	}
+	return &repos{container: containerRepo, apiKeys: apiKeyRepo, uploads: uploadRepo, closer: containerRepo}, nil
 }

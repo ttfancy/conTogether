@@ -39,11 +39,21 @@ func NewSQLiteContainerRepo(path string) (*SQLiteContainerRepo, error) {
 
 func (r *SQLiteContainerRepo) Close() error { return r.db.Close() }
 
+// DB returns the underlying connection pool, so main.go can hand it to
+// other repositories (e.g. APIKeyRepo) that need to share the same
+// SQLite file rather than opening a second, independently-pooled
+// connection to it.
+func (r *SQLiteContainerRepo) DB() *sql.DB { return r.db }
+
 func (r *SQLiteContainerRepo) Save(ctx context.Context, c *domain.Container) error {
+	visibility := c.Visibility
+	if visibility == "" {
+		visibility = domain.VisibilityPrivate
+	}
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO containers (id, docker_id, owner_id, name, image, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.DockerID, c.OwnerID, c.Name, c.Image, string(c.Status),
+		INSERT INTO containers (id, docker_id, owner_id, name, image, status, visibility, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.DockerID, c.OwnerID, c.Name, c.Image, string(c.Status), string(visibility),
 		c.CreatedAt.UnixNano(), c.UpdatedAt.UnixNano(),
 	)
 	return err
@@ -51,13 +61,13 @@ func (r *SQLiteContainerRepo) Save(ctx context.Context, c *domain.Container) err
 
 func (r *SQLiteContainerRepo) FindByID(ctx context.Context, id string) (*domain.Container, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, docker_id, owner_id, name, image, status, created_at, updated_at
+		SELECT id, docker_id, owner_id, name, image, status, visibility, created_at, updated_at
 		FROM containers WHERE id = ?`, id)
 
 	var c domain.Container
-	var status string
+	var status, visibility string
 	var createdAt, updatedAt int64
-	err := row.Scan(&c.ID, &c.DockerID, &c.OwnerID, &c.Name, &c.Image, &status, &createdAt, &updatedAt)
+	err := row.Scan(&c.ID, &c.DockerID, &c.OwnerID, &c.Name, &c.Image, &status, &visibility, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil // not found is not an error at this layer; service maps it to ErrNotFound
 	}
@@ -65,15 +75,22 @@ func (r *SQLiteContainerRepo) FindByID(ctx context.Context, id string) (*domain.
 		return nil, err
 	}
 	c.Status = domain.ContainerStatus(status)
+	c.Visibility = domain.Visibility(visibility)
 	c.CreatedAt = time.Unix(0, createdAt)
 	c.UpdatedAt = time.Unix(0, updatedAt)
 	return &c, nil
 }
 
-func (r *SQLiteContainerRepo) ListByOwner(ctx context.Context, ownerID string) ([]*domain.Container, error) {
+// ListVisibleTo returns every container ownerID may read: its own
+// (any visibility) plus every other owner's public ones, newest first.
+// This is a superset of the old "list mine only" behavior — see
+// service.ContainerService.ListContainers for why "public" extends to
+// listing, not just direct Get.
+func (r *SQLiteContainerRepo) ListVisibleTo(ctx context.Context, ownerID string) ([]*domain.Container, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, docker_id, owner_id, name, image, status, created_at, updated_at
-		FROM containers WHERE owner_id = ? ORDER BY created_at DESC`, ownerID)
+		SELECT id, docker_id, owner_id, name, image, status, visibility, created_at, updated_at
+		FROM containers WHERE owner_id = ? OR visibility = ? ORDER BY created_at DESC`,
+		ownerID, string(domain.VisibilityPublic))
 	if err != nil {
 		return nil, err
 	}
@@ -82,12 +99,13 @@ func (r *SQLiteContainerRepo) ListByOwner(ctx context.Context, ownerID string) (
 	var out []*domain.Container
 	for rows.Next() {
 		var c domain.Container
-		var status string
+		var status, visibility string
 		var createdAt, updatedAt int64
-		if err := rows.Scan(&c.ID, &c.DockerID, &c.OwnerID, &c.Name, &c.Image, &status, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.DockerID, &c.OwnerID, &c.Name, &c.Image, &status, &visibility, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		c.Status = domain.ContainerStatus(status)
+		c.Visibility = domain.Visibility(visibility)
 		c.CreatedAt = time.Unix(0, createdAt)
 		c.UpdatedAt = time.Unix(0, updatedAt)
 		out = append(out, &c)
@@ -99,6 +117,14 @@ func (r *SQLiteContainerRepo) UpdateStatus(ctx context.Context, id string, statu
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE containers SET status = ?, updated_at = ? WHERE id = ?`,
 		string(status), time.Now().UnixNano(), id,
+	)
+	return err
+}
+
+func (r *SQLiteContainerRepo) UpdateVisibility(ctx context.Context, id string, visibility domain.Visibility) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE containers SET visibility = ?, updated_at = ? WHERE id = ?`,
+		string(visibility), time.Now().UnixNano(), id,
 	)
 	return err
 }

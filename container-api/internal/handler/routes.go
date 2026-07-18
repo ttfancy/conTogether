@@ -20,10 +20,14 @@ func RegisterRoutes(router gin.IRouter, containers *ContainerHandler, uploads *U
 	router.POST("/containers/:id/stop", jobs.StopContainer)
 	router.DELETE("/containers/:id", jobs.DeleteContainer)
 	router.GET("/containers/:id/logs/stream", containers.StreamLogs)
+	router.PUT("/containers/:id/visibility", containers.SetVisibility)
 
 	router.GET("/jobs/:jobId", jobs.GetJob)
 
 	router.POST("/uploads", uploads.UploadFile)
+	router.GET("/uploads", uploads.ListUploads)
+	router.GET("/uploads/:id", uploads.DownloadUpload)
+	router.PUT("/uploads/:id/visibility", uploads.SetVisibility)
 
 	router.GET("/logs", logs.ReadLogs)
 	router.DELETE("/logs", logs.ClearLogs)

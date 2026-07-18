@@ -64,6 +64,14 @@ func TestPostgresSaveFindUpdateDeleteRoundTrip(t *testing.T) {
 		t.Fatalf("expected status running, got %+v (err=%v)", updated, err)
 	}
 
+	if err := repo.UpdateVisibility(ctx, c.ID, domain.VisibilityPublic); err != nil {
+		t.Fatalf("UpdateVisibility failed: %v", err)
+	}
+	madePublic, err := repo.FindByID(ctx, c.ID)
+	if err != nil || madePublic.Visibility != domain.VisibilityPublic {
+		t.Fatalf("expected visibility public, got %+v (err=%v)", madePublic, err)
+	}
+
 	if err := repo.Delete(ctx, c.ID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -76,7 +84,7 @@ func TestPostgresSaveFindUpdateDeleteRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPostgresListByOwnerReturnsOnlyThatOwnersContainers(t *testing.T) {
+func TestPostgresListVisibleToReturnsOnlyThatOwnersContainers(t *testing.T) {
 	dsn := testPostgresDSN(t)
 	repo, err := repository.NewPostgresContainerRepo(dsn)
 	if err != nil {
@@ -98,9 +106,9 @@ func TestPostgresListByOwnerReturnsOnlyThatOwnersContainers(t *testing.T) {
 		}
 	}
 
-	got, err := repo.ListByOwner(ctx, "pg-owner-a")
+	got, err := repo.ListVisibleTo(ctx, "pg-owner-a")
 	if err != nil {
-		t.Fatalf("ListByOwner failed: %v", err)
+		t.Fatalf("ListVisibleTo failed: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("got %d containers, want 2 (only pg-owner-a's)", len(got))

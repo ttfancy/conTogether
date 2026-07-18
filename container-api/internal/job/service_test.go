@@ -21,10 +21,10 @@ type recordingOperator struct {
 	stopped   []string
 	removed   []string
 	failOn    string // containerID that should fail every op
-	rejectGet string // containerID for which GetContainer fails (simulates not-found/forbidden)
+	rejectGet string // containerID for which MustOwnContainer fails (simulates not-found/forbidden)
 }
 
-func (o *recordingOperator) GetContainer(_ context.Context, _, id string) (*domain.Container, error) {
+func (o *recordingOperator) MustOwnContainer(_ context.Context, _, id string) (*domain.Container, error) {
 	if id == o.rejectGet {
 		return nil, fmt.Errorf("simulated rejection for %s", id)
 	}
@@ -119,12 +119,12 @@ func TestSubmitRecordsOperatorFailure(t *testing.T) {
 	}
 }
 
-// TestSubmitFailsFastOnGetContainerError verifies that an
+// TestSubmitFailsFastOnMustOwnContainerError verifies that an
 // ownership/existence error is returned synchronously from Submit
 // itself — and that the operation never runs — rather than only
 // surfacing later as an async job failure the caller would have to
 // poll for.
-func TestSubmitFailsFastOnGetContainerError(t *testing.T) {
+func TestSubmitFailsFastOnMustOwnContainerError(t *testing.T) {
 	op := &recordingOperator{rejectGet: "ctr-forbidden"}
 	svc := job.NewService(job.NewMemoryStore(), op, testLogger(t), sequentialIDs(), 2, 10)
 	defer svc.Close()

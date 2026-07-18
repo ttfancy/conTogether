@@ -1,11 +1,12 @@
 import { request } from './client'
-import type { Container, Job } from './types'
+import type { Container, Job, Visibility } from './types'
 
 export interface CreateContainerInput {
   image: string
   name: string
   cmd?: string[]
   env?: string[]
+  visibility?: Visibility
 }
 
 export function listContainers(): Promise<Container[]> {
@@ -40,4 +41,13 @@ export function deleteContainer(id: string): Promise<Job> {
 
 export function getJob(id: string): Promise<Job> {
   return request<Job>(`/jobs/${encodeURIComponent(id)}`)
+}
+
+// Owner-only on the backend regardless of the container's current
+// visibility — see service.ContainerService.SetVisibility.
+export function setContainerVisibility(id: string, visibility: Visibility): Promise<Container> {
+  return request<Container>(`/containers/${encodeURIComponent(id)}/visibility`, {
+    method: 'PUT',
+    body: JSON.stringify({ visibility }),
+  })
 }

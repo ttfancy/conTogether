@@ -12,3 +12,6 @@
 
 /web/node_modules/
 /web/dist/
+
+# Claude Code's local session/permission state, not project config.
+/.claude/

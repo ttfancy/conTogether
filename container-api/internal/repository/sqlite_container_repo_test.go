@@ -41,6 +41,9 @@ func TestSaveFindUpdateDeleteRoundTrip(t *testing.T) {
 	if got.DockerID != c.DockerID || got.OwnerID != c.OwnerID || got.Status != domain.StatusCreated {
 		t.Fatalf("unexpected record: %+v", got)
 	}
+	if got.Visibility != domain.VisibilityPrivate {
+		t.Fatalf("visibility = %q, want default %q when unset on Save", got.Visibility, domain.VisibilityPrivate)
+	}
 
 	if err := repo.UpdateStatus(ctx, c.ID, domain.StatusRunning); err != nil {
 		t.Fatalf("UpdateStatus failed: %v", err)
@@ -48,6 +51,14 @@ func TestSaveFindUpdateDeleteRoundTrip(t *testing.T) {
 	updated, err := repo.FindByID(ctx, c.ID)
 	if err != nil || updated.Status != domain.StatusRunning {
 		t.Fatalf("expected status running, got %+v (err=%v)", updated, err)
+	}
+
+	if err := repo.UpdateVisibility(ctx, c.ID, domain.VisibilityPublic); err != nil {
+		t.Fatalf("UpdateVisibility failed: %v", err)
+	}
+	madePublic, err := repo.FindByID(ctx, c.ID)
+	if err != nil || madePublic.Visibility != domain.VisibilityPublic {
+		t.Fatalf("expected visibility public, got %+v (err=%v)", madePublic, err)
 	}
 
 	if err := repo.Delete(ctx, c.ID); err != nil {
@@ -62,7 +73,7 @@ func TestSaveFindUpdateDeleteRoundTrip(t *testing.T) {
 	}
 }
 
-func TestListByOwnerReturnsOnlyThatOwnersContainersNewestFirst(t *testing.T) {
+func TestListVisibleToReturnsOnlyThatOwnersContainersNewestFirst(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "containers.db")
 	repo, err := repository.NewSQLiteContainerRepo(path)
 	if err != nil {
@@ -83,19 +94,19 @@ func TestListByOwnerReturnsOnlyThatOwnersContainersNewestFirst(t *testing.T) {
 		}
 	}
 
-	got, err := repo.ListByOwner(ctx, "owner-a")
+	got, err := repo.ListVisibleTo(ctx, "owner-a")
 	if err != nil {
-		t.Fatalf("ListByOwner failed: %v", err)
+		t.Fatalf("ListVisibleTo failed: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d containers, want 2 (only owner-a's)", len(got))
+		t.Fatalf("got %d containers, want 2 (only owner-a's — owner-b's is private)", len(got))
 	}
 	if got[0].ID != "ctr-a2" || got[1].ID != "ctr-a1" {
 		t.Fatalf("got IDs [%s %s], want [ctr-a2 ctr-a1] (newest first)", got[0].ID, got[1].ID)
 	}
 }
 
-func TestListByOwnerReturnsEmptyNotErrorWhenNone(t *testing.T) {
+func TestListVisibleToIncludesOtherOwnersPublicContainers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "containers.db")
 	repo, err := repository.NewSQLiteContainerRepo(path)
 	if err != nil {
@@ -103,9 +114,43 @@ func TestListByOwnerReturnsEmptyNotErrorWhenNone(t *testing.T) {
 	}
 	defer repo.Close()
 
-	got, err := repo.ListByOwner(context.Background(), "nobody")
+	ctx := context.Background()
+	now := time.Now()
+	containers := []*domain.Container{
+		{ID: "ctr-mine", OwnerID: "owner-a", DockerID: "d1", Name: "mine", Image: "alpine", Status: domain.StatusCreated, Visibility: domain.VisibilityPrivate, CreatedAt: now, UpdatedAt: now},
+		{ID: "ctr-their-private", OwnerID: "owner-b", DockerID: "d2", Name: "priv", Image: "alpine", Status: domain.StatusCreated, Visibility: domain.VisibilityPrivate, CreatedAt: now, UpdatedAt: now},
+		{ID: "ctr-their-public", OwnerID: "owner-b", DockerID: "d3", Name: "pub", Image: "alpine", Status: domain.StatusCreated, Visibility: domain.VisibilityPublic, CreatedAt: now, UpdatedAt: now},
+	}
+	for _, c := range containers {
+		if err := repo.Save(ctx, c); err != nil {
+			t.Fatalf("Save failed: %v", err)
+		}
+	}
+
+	got, err := repo.ListVisibleTo(ctx, "owner-a")
 	if err != nil {
-		t.Fatalf("ListByOwner failed: %v", err)
+		t.Fatalf("ListVisibleTo failed: %v", err)
+	}
+	ids := make(map[string]bool)
+	for _, c := range got {
+		ids[c.ID] = true
+	}
+	if len(got) != 2 || !ids["ctr-mine"] || !ids["ctr-their-public"] {
+		t.Fatalf("ListVisibleTo(owner-a) = %+v, want exactly [ctr-mine, ctr-their-public]", got)
+	}
+}
+
+func TestListVisibleToReturnsEmptyNotErrorWhenNone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "containers.db")
+	repo, err := repository.NewSQLiteContainerRepo(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteContainerRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	got, err := repo.ListVisibleTo(context.Background(), "nobody")
+	if err != nil {
+		t.Fatalf("ListVisibleTo failed: %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("got %d containers, want 0", len(got))

@@ -25,6 +25,7 @@ type ContainerServicer interface {
 	CreateContainer(ctx context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error)
 	GetContainer(ctx context.Context, ownerID, id string) (*domain.Container, error)
 	ListContainers(ctx context.Context, ownerID string) ([]*domain.Container, error)
+	SetVisibility(ctx context.Context, ownerID, id string, visibility domain.Visibility) error
 }
 
 // ContainerLogStreamer streams a managed container's own stdout/stderr —
@@ -44,21 +45,41 @@ func NewContainerHandler(svc ContainerServicer, streams ContainerLogStreamer) *C
 }
 
 type createContainerRequest struct {
-	Image string   `json:"image" binding:"required"`
-	Name  string   `json:"name" binding:"required"`
-	Cmd   []string `json:"cmd"`
-	Env   []string `json:"env"`
+	Image      string   `json:"image" binding:"required"`
+	Name       string   `json:"name" binding:"required"`
+	Cmd        []string `json:"cmd"`
+	Env        []string `json:"env"`
+	Visibility string   `json:"visibility"` // "private" (default) or "public"
 }
 
 type containerResponse struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	Status string `json:"status"`
+	ID         string `json:"id"`
+	OwnerID    string `json:"owner_id"`
+	Name       string `json:"name"`
+	Image      string `json:"image"`
+	Status     string `json:"status"`
+	Visibility string `json:"visibility"`
+	// IsOwner tells the frontend whether the caller may mutate this
+	// container (start/stop/delete/change visibility) — computed here,
+	// not left for the client to infer, since the client only knows its
+	// own API key, not the owner ID it resolves to.
+	IsOwner bool `json:"is_owner"`
 }
 
-func toResponse(c *domain.Container) containerResponse {
-	return containerResponse{ID: c.ID, Name: c.Name, Image: c.Image, Status: string(c.Status)}
+func toResponse(c *domain.Container, callerOwnerID string) containerResponse {
+	return containerResponse{
+		ID:         c.ID,
+		OwnerID:    c.OwnerID,
+		Name:       c.Name,
+		Image:      c.Image,
+		Status:     string(c.Status),
+		Visibility: string(c.Visibility),
+		IsOwner:    c.OwnerID == callerOwnerID,
+	}
+}
+
+type setVisibilityRequest struct {
+	Visibility string `json:"visibility" binding:"required"`
 }
 
 // CreateContainer godoc
@@ -78,17 +99,19 @@ func (h *ContainerHandler) CreateContainer(c *gin.Context) {
 		return
 	}
 
-	container, err := h.svc.CreateContainer(c.Request.Context(), middleware.OwnerID(c.Request.Context()), domain.ContainerSpec{
-		Image: req.Image,
-		Name:  req.Name,
-		Cmd:   req.Cmd,
-		Env:   req.Env,
+	ownerID := middleware.OwnerID(c.Request.Context())
+	container, err := h.svc.CreateContainer(c.Request.Context(), ownerID, domain.ContainerSpec{
+		Image:      req.Image,
+		Name:       req.Name,
+		Cmd:        req.Cmd,
+		Env:        req.Env,
+		Visibility: domain.Visibility(req.Visibility),
 	})
 	if err != nil {
 		c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, toResponse(container))
+	c.JSON(http.StatusCreated, toResponse(container, ownerID))
 }
 
 // GetContainer godoc
@@ -101,32 +124,68 @@ func (h *ContainerHandler) CreateContainer(c *gin.Context) {
 // @Failure      404 {object} map[string]string
 // @Router       /containers/{id} [get]
 func (h *ContainerHandler) GetContainer(c *gin.Context) {
-	container, err := h.svc.GetContainer(c.Request.Context(), middleware.OwnerID(c.Request.Context()), c.Param("id"))
+	ownerID := middleware.OwnerID(c.Request.Context())
+	container, err := h.svc.GetContainer(c.Request.Context(), ownerID, c.Param("id"))
 	if err != nil {
 		c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, toResponse(container))
+	c.JSON(http.StatusOK, toResponse(container, ownerID))
 }
 
 // ListContainers godoc
-// @Summary      List the authenticated owner's containers
+// @Summary      List containers the authenticated owner can see (their own, plus everyone's public ones)
 // @Tags         containers
 // @Produce      json
 // @Security     ApiKeyAuth
 // @Success      200 {array} containerResponse
 // @Router       /containers [get]
 func (h *ContainerHandler) ListContainers(c *gin.Context) {
-	containers, err := h.svc.ListContainers(c.Request.Context(), middleware.OwnerID(c.Request.Context()))
+	ownerID := middleware.OwnerID(c.Request.Context())
+	containers, err := h.svc.ListContainers(c.Request.Context(), ownerID)
 	if err != nil {
 		c.Error(err)
 		return
 	}
 	out := make([]containerResponse, len(containers))
 	for i, container := range containers {
-		out[i] = toResponse(container)
+		out[i] = toResponse(container, ownerID)
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// SetVisibility godoc
+// @Summary      Change a container's visibility (owner-only)
+// @Tags         containers
+// @Accept       json
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Param        id      path string                true "Container ID"
+// @Param        request body setVisibilityRequest   true "Desired visibility"
+// @Success      200 {object} containerResponse
+// @Failure      400 {object} map[string]string
+// @Failure      403 {object} map[string]string
+// @Router       /containers/{id}/visibility [put]
+func (h *ContainerHandler) SetVisibility(c *gin.Context) {
+	var req setVisibilityRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ownerID := middleware.OwnerID(c.Request.Context())
+	id := c.Param("id")
+	if err := h.svc.SetVisibility(c.Request.Context(), ownerID, id, domain.Visibility(req.Visibility)); err != nil {
+		c.Error(err)
+		return
+	}
+
+	container, err := h.svc.GetContainer(c.Request.Context(), ownerID, id)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, toResponse(container, ownerID))
 }
 
 // StreamLogs godoc

@@ -21,6 +21,21 @@ func TestApplySQLiteCreatesSchema(t *testing.T) {
 
 	assertSQLiteTableExists(t, db, "containers")
 	assertSQLiteIndexExists(t, db, "idx_containers_owner_id")
+	assertSQLiteTableExists(t, db, "api_keys")
+	assertSQLiteTableExists(t, db, "uploads")
+
+	if _, err := db.Exec(`
+		INSERT INTO containers (id, docker_id, owner_id, name, image, status, created_at, updated_at)
+		VALUES ('ctr-default-vis', 'docker-1', 'owner-1', 'web', 'alpine', 'created', 0, 0)`); err != nil {
+		t.Fatalf("seed insert failed: %v", err)
+	}
+	var visibility string
+	if err := db.QueryRow(`SELECT visibility FROM containers WHERE id = 'ctr-default-vis'`).Scan(&visibility); err != nil {
+		t.Fatalf("query visibility failed: %v", err)
+	}
+	if visibility != "private" {
+		t.Fatalf("visibility column default = %q, want %q for a row inserted without specifying it", visibility, "private")
+	}
 }
 
 // TestApplyIsIdempotent verifies Apply is safe to call on every process
@@ -52,10 +67,16 @@ func TestApplyRejectsUnknownDriver(t *testing.T) {
 // step is non-destructive to data, unlike 0001's down migration (which
 // drops the whole table). Down migrations aren't uniformly dangerous;
 // what each one actually does has to be checked, not assumed.
+//
+// Steps(db, driver, 2) — not Apply, which would run every migration —
+// stops deliberately at 0002 so the later Steps(-1) undoes exactly that
+// one migration regardless of how many more have been added since (a
+// bare Apply + Steps(-1) would instead undo whichever migration happens
+// to be newest).
 func TestStepDownRemovesIndexOnlyAndPreservesData(t *testing.T) {
 	db := openTestSQLite(t)
-	if err := migrations.Apply(db, "sqlite"); err != nil {
-		t.Fatalf("Apply failed: %v", err)
+	if err := migrations.Steps(db, "sqlite", 2); err != nil {
+		t.Fatalf("Steps(2) failed: %v", err)
 	}
 	assertSQLiteIndexExists(t, db, "idx_containers_owner_id")
 
@@ -190,8 +211,11 @@ func TestApplyPostgres(t *testing.T) {
 func TestUpDownUpRoundTripPostgres(t *testing.T) {
 	db := openTestPostgres(t)
 
-	if err := migrations.Apply(db, "postgres"); err != nil {
-		t.Fatalf("first Apply failed: %v", err)
+	// Steps(2), not Apply — see TestStepDownRemovesIndexOnlyAndPreservesData
+	// for why this must stop exactly at 0002 rather than running every
+	// migration, so the Steps(-1) below undoes only the index.
+	if err := migrations.Steps(db, "postgres", 2); err != nil {
+		t.Fatalf("Steps(2) failed: %v", err)
 	}
 
 	if _, err := db.Exec(`

@@ -42,12 +42,12 @@ func (r *fakeRepo) FindByID(_ context.Context, id string) (*domain.Container, er
 	return &cp, nil
 }
 
-func (r *fakeRepo) ListByOwner(_ context.Context, ownerID string) ([]*domain.Container, error) {
+func (r *fakeRepo) ListVisibleTo(_ context.Context, ownerID string) ([]*domain.Container, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []*domain.Container
 	for _, c := range r.byID {
-		if c.OwnerID == ownerID {
+		if c.OwnerID == ownerID || c.Visibility == domain.VisibilityPublic {
 			cp := *c
 			out = append(out, &cp)
 		}
@@ -63,6 +63,17 @@ func (r *fakeRepo) UpdateStatus(_ context.Context, id string, status domain.Cont
 		return fmt.Errorf("no such container: %s", id)
 	}
 	c.Status = status
+	return nil
+}
+
+func (r *fakeRepo) UpdateVisibility(_ context.Context, id string, visibility domain.Visibility) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.byID[id]
+	if !ok {
+		return fmt.Errorf("no such container: %s", id)
+	}
+	c.Visibility = visibility
 	return nil
 }
 
@@ -213,6 +224,98 @@ func TestGetContainerNotFound(t *testing.T) {
 	}
 }
 
+func TestGetContainerVisibleToAnyoneWhenPublic(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "web", Visibility: domain.VisibilityPublic})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+
+	got, err := svc.GetContainer(ctx, "owner-2", c.ID)
+	if err != nil {
+		t.Fatalf("GetContainer(public, other owner) failed: %v", err)
+	}
+	if got.ID != c.ID {
+		t.Fatalf("got container %+v, want %+v", got, c)
+	}
+}
+
+func TestCreateContainerRejectsInvalidVisibility(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "web", Visibility: "sorta-public"}); !errors.Is(err, service.ErrInvalidVisibility) {
+		t.Fatalf("CreateContainer with invalid visibility = %v, want ErrInvalidVisibility", err)
+	}
+}
+
+// TestStartStopDeleteForbiddenForNonOwnerEvenWhenPublic is the critical
+// authorization boundary: visibility grants read access only.
+// GetContainer/StreamLogs allow a non-owner to read a public container,
+// but Start/Stop/Delete must still reject them outright — otherwise
+// "public" would silently become "anyone can also control this
+// container," which is not what visibility means here.
+func TestStartStopDeleteForbiddenForNonOwnerEvenWhenPublic(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "web", Visibility: domain.VisibilityPublic})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+
+	// Sanity check: a non-owner CAN read it (this is the intended effect
+	// of "public").
+	if _, err := svc.GetContainer(ctx, "owner-2", c.ID); err != nil {
+		t.Fatalf("GetContainer(public, other owner) failed: %v", err)
+	}
+
+	if err := svc.StartContainer(ctx, "owner-2", c.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("StartContainer as non-owner on a public container = %v, want ErrForbidden", err)
+	}
+	if err := svc.StopContainer(ctx, "owner-2", c.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("StopContainer as non-owner on a public container = %v, want ErrForbidden", err)
+	}
+	if err := svc.DeleteContainer(ctx, "owner-2", c.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("DeleteContainer as non-owner on a public container = %v, want ErrForbidden", err)
+	}
+	if err := svc.SetVisibility(ctx, "owner-2", c.ID, domain.VisibilityPrivate); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("SetVisibility as non-owner on a public container = %v, want ErrForbidden", err)
+	}
+
+	// And MustOwnContainer — job.ContainerOperator's fail-fast pre-check —
+	// must reject the non-owner too, for the same reason.
+	if _, err := svc.MustOwnContainer(ctx, "owner-2", c.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("MustOwnContainer as non-owner on a public container = %v, want ErrForbidden", err)
+	}
+}
+
+func TestSetVisibilityByOwnerThenVisibleToOthers(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "web"})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+	if _, err := svc.GetContainer(ctx, "owner-2", c.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("GetContainer before making public = %v, want ErrForbidden", err)
+	}
+
+	if err := svc.SetVisibility(ctx, "owner-1", c.ID, domain.VisibilityPublic); err != nil {
+		t.Fatalf("SetVisibility failed: %v", err)
+	}
+	got, err := svc.GetContainer(ctx, "owner-2", c.ID)
+	if err != nil {
+		t.Fatalf("GetContainer after making public failed: %v", err)
+	}
+	if got.Visibility != domain.VisibilityPublic {
+		t.Fatalf("visibility = %q, want %q", got.Visibility, domain.VisibilityPublic)
+	}
+}
+
 func TestListContainersReturnsOnlyOwnersContainers(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
@@ -238,6 +341,35 @@ func TestListContainersReturnsOnlyOwnersContainers(t *testing.T) {
 		if c.OwnerID != "owner-1" {
 			t.Fatalf("ListContainers(owner-1) returned a container owned by %q", c.OwnerID)
 		}
+	}
+}
+
+func TestListContainersIncludesOtherOwnersPublicButNotPrivate(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	mine, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "mine"})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+	if _, err := svc.CreateContainer(ctx, "owner-2", domain.ContainerSpec{Image: "alpine", Name: "theirs-private"}); err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+	theirsPublic, err := svc.CreateContainer(ctx, "owner-2", domain.ContainerSpec{Image: "alpine", Name: "theirs-public", Visibility: domain.VisibilityPublic})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+
+	got, err := svc.ListContainers(ctx, "owner-1")
+	if err != nil {
+		t.Fatalf("ListContainers failed: %v", err)
+	}
+	ids := make(map[string]bool)
+	for _, c := range got {
+		ids[c.ID] = true
+	}
+	if len(got) != 2 || !ids[mine.ID] || !ids[theirsPublic.ID] {
+		t.Fatalf("ListContainers(owner-1) = %+v, want exactly [mine, theirs-public]", got)
 	}
 }
 

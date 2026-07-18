@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("container not found")
-	ErrForbidden = errors.New("not the owner of this container")
+	ErrNotFound          = errors.New("container not found")
+	ErrForbidden         = errors.New("not the owner of this container")
+	ErrInvalidVisibility = errors.New("visibility must be \"private\" or \"public\"")
 )
 
 // ContainerRepository is the persistence seam ContainerService needs.
@@ -28,8 +29,11 @@ var (
 type ContainerRepository interface {
 	Save(ctx context.Context, c *domain.Container) error
 	FindByID(ctx context.Context, id string) (*domain.Container, error)
-	ListByOwner(ctx context.Context, ownerID string) ([]*domain.Container, error)
+	// ListVisibleTo returns everything ownerID may read: its own
+	// containers (any visibility) plus every other owner's public ones.
+	ListVisibleTo(ctx context.Context, ownerID string) ([]*domain.Container, error)
 	UpdateStatus(ctx context.Context, id string, status domain.ContainerStatus) error
+	UpdateVisibility(ctx context.Context, id string, visibility domain.Visibility) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -69,6 +73,14 @@ func NewContainerService(repo ContainerRepository, docker DockerClient, logger *
 }
 
 func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error) {
+	visibility := spec.Visibility
+	if visibility == "" {
+		visibility = domain.VisibilityPrivate
+	}
+	if !visibility.Valid() {
+		return nil, fmt.Errorf("%w: invalid visibility %q", ErrInvalidVisibility, spec.Visibility)
+	}
+
 	dockerID, err := s.docker.CreateContainer(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create docker container: %w", err)
@@ -76,14 +88,15 @@ func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, 
 
 	now := time.Now()
 	c := &domain.Container{
-		ID:        s.newID(),
-		DockerID:  dockerID,
-		OwnerID:   ownerID,
-		Name:      spec.Name,
-		Image:     spec.Image,
-		Status:    domain.StatusCreated,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         s.newID(),
+		DockerID:   dockerID,
+		OwnerID:    ownerID,
+		Name:       spec.Name,
+		Image:      spec.Image,
+		Status:     domain.StatusCreated,
+		Visibility: visibility,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := s.repo.Save(ctx, c); err != nil {
 		return nil, fmt.Errorf("save container record: %w", err)
@@ -94,7 +107,31 @@ func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, 
 	return c, nil
 }
 
+// GetContainer returns c if ownerID owns it OR it's public — a read
+// path, not a mutation path. StreamLogs (also read-only) shares this
+// check. Start/Stop/Delete deliberately do NOT use this: see
+// mustOwnContainer.
 func (s *ContainerService) GetContainer(ctx context.Context, ownerID, id string) (*domain.Container, error) {
+	c, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, ErrNotFound
+	}
+	if c.OwnerID != ownerID && c.Visibility != domain.VisibilityPublic {
+		return nil, ErrForbidden
+	}
+	return c, nil
+}
+
+// mustOwnContainer is the strict counterpart to GetContainer: visibility
+// grants read access only, never the right to mutate someone else's
+// container, so Start/Stop/Delete (and job.ContainerOperator's
+// fail-fast pre-check, which calls this via the exported
+// MustOwnContainer below) reject any non-owner outright regardless of
+// the container's visibility.
+func (s *ContainerService) mustOwnContainer(ctx context.Context, ownerID, id string) (*domain.Container, error) {
 	c, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -108,10 +145,37 @@ func (s *ContainerService) GetContainer(ctx context.Context, ownerID, id string)
 	return c, nil
 }
 
-// ListContainers returns every container owned by ownerID, most
-// recently created first.
+// MustOwnContainer is the exported form of mustOwnContainer, satisfying
+// job.ContainerOperator's pre-submit ownership check.
+func (s *ContainerService) MustOwnContainer(ctx context.Context, ownerID, id string) (*domain.Container, error) {
+	return s.mustOwnContainer(ctx, ownerID, id)
+}
+
+// SetVisibility flips a container's visibility — owner-only, like
+// Start/Stop/Delete, since visibility is a property of the resource
+// only its owner should control.
+func (s *ContainerService) SetVisibility(ctx context.Context, ownerID, id string, visibility domain.Visibility) error {
+	if !visibility.Valid() {
+		return fmt.Errorf("%w: invalid visibility %q", ErrInvalidVisibility, visibility)
+	}
+	return s.withLock(id, func() error {
+		if _, err := s.mustOwnContainer(ctx, ownerID, id); err != nil {
+			return err
+		}
+		if err := s.repo.UpdateVisibility(ctx, id, visibility); err != nil {
+			return fmt.Errorf("update visibility: %w", err)
+		}
+		_ = s.logger.WriteLog("INFO", "container visibility changed",
+			logsys.F("container_id", id), logsys.F("visibility", string(visibility)))
+		return nil
+	})
+}
+
+// ListContainers returns every container ownerID may read: its own (any
+// visibility) plus every other owner's public ones, most recently
+// created first.
 func (s *ContainerService) ListContainers(ctx context.Context, ownerID string) ([]*domain.Container, error) {
-	return s.repo.ListByOwner(ctx, ownerID)
+	return s.repo.ListVisibleTo(ctx, ownerID)
 }
 
 // StreamLogs returns the container's live stdout/stderr, backfilling
@@ -130,7 +194,7 @@ func (s *ContainerService) StreamLogs(ctx context.Context, ownerID, id, tail str
 
 func (s *ContainerService) StartContainer(ctx context.Context, ownerID, id string) error {
 	return s.withLock(id, func() error {
-		c, err := s.GetContainer(ctx, ownerID, id)
+		c, err := s.mustOwnContainer(ctx, ownerID, id)
 		if err != nil {
 			return err
 		}
@@ -147,7 +211,7 @@ func (s *ContainerService) StartContainer(ctx context.Context, ownerID, id strin
 
 func (s *ContainerService) StopContainer(ctx context.Context, ownerID, id string) error {
 	return s.withLock(id, func() error {
-		c, err := s.GetContainer(ctx, ownerID, id)
+		c, err := s.mustOwnContainer(ctx, ownerID, id)
 		if err != nil {
 			return err
 		}
@@ -164,7 +228,7 @@ func (s *ContainerService) StopContainer(ctx context.Context, ownerID, id string
 
 func (s *ContainerService) DeleteContainer(ctx context.Context, ownerID, id string) error {
 	return s.withLock(id, func() error {
-		c, err := s.GetContainer(ctx, ownerID, id)
+		c, err := s.mustOwnContainer(ctx, ownerID, id)
 		if err != nil {
 			return err
 		}

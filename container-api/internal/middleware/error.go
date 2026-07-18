@@ -9,6 +9,7 @@ import (
 
 	"contogether/container-api/internal/job"
 	"contogether/container-api/internal/service"
+	"contogether/container-api/internal/upload"
 	"contogether/logsys"
 )
 
@@ -48,10 +49,15 @@ func Error(logger *logsys.Manager) gin.HandlerFunc {
 		_ = logger.WriteLog("ERROR", "request error", logsys.F("error", err.Error()))
 
 		switch {
-		case errors.Is(err, service.ErrNotFound), errors.Is(err, job.ErrNotFound):
+		case errors.Is(err, service.ErrNotFound), errors.Is(err, job.ErrNotFound), errors.Is(err, upload.ErrNotFound):
 			c.JSON(http.StatusNotFound, errorResponse{Error: "not found"})
-		case errors.Is(err, service.ErrForbidden):
+		case errors.Is(err, service.ErrForbidden), errors.Is(err, upload.ErrForbidden):
 			c.JSON(http.StatusForbidden, errorResponse{Error: "forbidden"})
+		case errors.Is(err, service.ErrInvalidVisibility), errors.Is(err, upload.ErrInvalidVisibility):
+			// Unlike the generic case below, this message is safe to echo:
+			// it's a fixed, non-sensitive validation string, not something
+			// derived from SQL/file/driver internals.
+			c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
 		case errors.Is(err, job.ErrQueueFull), errors.Is(err, job.ErrClosed):
 			c.JSON(http.StatusServiceUnavailable, errorResponse{Error: "service temporarily unavailable, try again"})
 		default:

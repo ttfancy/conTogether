@@ -46,11 +46,18 @@ func newFakeContainerService() *fakeContainerService {
 func (f *fakeContainerService) CreateContainer(_ context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c := &domain.Container{ID: "ctr-new", OwnerID: ownerID, Name: spec.Name, Image: spec.Image, Status: domain.StatusCreated}
+	visibility := spec.Visibility
+	if visibility == "" {
+		visibility = domain.VisibilityPrivate
+	}
+	c := &domain.Container{ID: "ctr-" + spec.Name, OwnerID: ownerID, Name: spec.Name, Image: spec.Image, Status: domain.StatusCreated, Visibility: visibility}
 	f.containers[c.ID] = c
 	return c, nil
 }
 
+// get is the strict owner-only check: used by Start/Stop/Delete (and
+// exposed as MustOwnContainer for job.ContainerOperator's pre-submit
+// check) — visibility never grants a non-owner the right to mutate.
 func (f *fakeContainerService) get(ownerID, id string) (*domain.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -64,7 +71,26 @@ func (f *fakeContainerService) get(ownerID, id string) (*domain.Container, error
 	return c, nil
 }
 
+// getReadable is the loosened read check GetContainer/StreamLogs use:
+// owner, or anyone if the container is public.
+func (f *fakeContainerService) getReadable(ownerID, id string) (*domain.Container, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.containers[id]
+	if !ok {
+		return nil, service.ErrNotFound
+	}
+	if c.OwnerID != ownerID && c.Visibility != domain.VisibilityPublic {
+		return nil, service.ErrForbidden
+	}
+	return c, nil
+}
+
 func (f *fakeContainerService) GetContainer(_ context.Context, ownerID, id string) (*domain.Container, error) {
+	return f.getReadable(ownerID, id)
+}
+
+func (f *fakeContainerService) MustOwnContainer(_ context.Context, ownerID, id string) (*domain.Container, error) {
 	return f.get(ownerID, id)
 }
 
@@ -73,11 +99,21 @@ func (f *fakeContainerService) ListContainers(_ context.Context, ownerID string)
 	defer f.mu.Unlock()
 	var out []*domain.Container
 	for _, c := range f.containers {
-		if c.OwnerID == ownerID {
+		if c.OwnerID == ownerID || c.Visibility == domain.VisibilityPublic {
 			out = append(out, c)
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeContainerService) SetVisibility(_ context.Context, ownerID, id string, visibility domain.Visibility) error {
+	if _, err := f.get(ownerID, id); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containers[id].Visibility = visibility
+	return nil
 }
 
 func (f *fakeContainerService) StartContainer(_ context.Context, ownerID, id string) error {
@@ -101,7 +137,7 @@ func (f *fakeContainerService) DeleteContainer(_ context.Context, ownerID, id st
 }
 
 func (f *fakeContainerService) StreamLogs(_ context.Context, ownerID, id, _ string) (io.ReadCloser, error) {
-	if _, err := f.get(ownerID, id); err != nil {
+	if _, err := f.getReadable(ownerID, id); err != nil {
 		return nil, err
 	}
 	return io.NopCloser(strings.NewReader("fake log line\n")), nil
@@ -109,7 +145,19 @@ func (f *fakeContainerService) StreamLogs(_ context.Context, ownerID, id, _ stri
 
 type fakeUploader struct{}
 
-func (fakeUploader) Save(_, _ string, _ io.Reader) (string, error) { return "/uploads/fake", nil }
+func (fakeUploader) Save(_ context.Context, ownerID, filename string, _ io.Reader, visibility domain.Visibility) (*domain.Upload, error) {
+	return &domain.Upload{ID: "up-fake", OwnerID: ownerID, Filename: filename, Path: "/uploads/fake", Visibility: visibility}, nil
+}
+
+func (fakeUploader) Get(_ context.Context, _, _ string) (*domain.Upload, error) {
+	return nil, service.ErrNotFound
+}
+
+func (fakeUploader) List(_ context.Context, _ string) ([]*domain.Upload, error) { return nil, nil }
+
+func (fakeUploader) SetVisibility(_ context.Context, _, _ string, _ domain.Visibility) error {
+	return nil
+}
 
 // newTestRouter wires the real async job.Service against the fake
 // container service — only the outermost repository/Docker layer is
@@ -485,5 +533,81 @@ func TestStreamContainerLogsForbiddenMapsTo403(t *testing.T) {
 	rec := doRequest(router, http.MethodGet, "/containers/ctr-existing/logs/stream", "owner-2-key", nil)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("stream as different owner = %d, want 403, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPublicContainerReadableByOtherOwnerButNotMutable is the end-to-end
+// version of the authorization boundary also checked at the service
+// layer (see TestStartStopDeleteForbiddenForNonOwnerEvenWhenPublic in
+// internal/service): a public container must be readable (GET, list)
+// by any authenticated caller, but start/stop/delete must still map to
+// 403 for a non-owner — visibility never extends to control.
+func TestPublicContainerReadableByOtherOwnerButNotMutable(t *testing.T) {
+	router := newTestRouter(t)
+
+	body, _ := json.Marshal(map[string]any{"image": "alpine", "name": "shared", "visibility": "public"})
+	createRec := doRequest(router, http.MethodPost, "/containers", "owner-1-key", body)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("POST /containers (public) = %d, want 201, body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	id := created["id"].(string)
+	if created["visibility"] != "public" {
+		t.Fatalf("created container visibility = %v, want %q", created["visibility"], "public")
+	}
+
+	getRec := doRequest(router, http.MethodGet, "/containers/"+id, "owner-2-key", nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET public container as different owner = %d, want 200, body=%s", getRec.Code, getRec.Body.String())
+	}
+
+	listRec := doRequest(router, http.MethodGet, "/containers", "owner-2-key", nil)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /containers as owner-2 = %d, want 200, body=%s", listRec.Code, listRec.Body.String())
+	}
+	var containers []map[string]any
+	if err := json.Unmarshal(listRec.Body.Bytes(), &containers); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	found := false
+	for _, c := range containers {
+		if c["id"] == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("GET /containers as owner-2 = %+v, want it to include the public container %q", containers, id)
+	}
+
+	if rec := doRequest(router, http.MethodPost, "/containers/"+id+"/start", "owner-2-key", nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("start as different owner on a public container = %d, want 403, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(router, http.MethodDelete, "/containers/"+id, "owner-2-key", nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("delete as different owner on a public container = %d, want 403, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSetVisibilityRequiresOwnership(t *testing.T) {
+	router := newTestRouter(t)
+
+	body, _ := json.Marshal(map[string]any{"visibility": "public"})
+	forbiddenRec := doRequest(router, http.MethodPut, "/containers/ctr-existing/visibility", "owner-2-key", body)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("PUT visibility as different owner = %d, want 403, body=%s", forbiddenRec.Code, forbiddenRec.Body.String())
+	}
+
+	okRec := doRequest(router, http.MethodPut, "/containers/ctr-existing/visibility", "owner-1-key", body)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("PUT visibility as owner = %d, want 200, body=%s", okRec.Code, okRec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(okRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if resp["visibility"] != "public" {
+		t.Fatalf("visibility after PUT = %v, want %q", resp["visibility"], "public")
 	}
 }

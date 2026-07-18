@@ -21,22 +21,24 @@ const (
 // are our own bookkeeping, DockerID is the foreign key into the Docker
 // daemon.
 type Container struct {
-	ID        string
-	DockerID  string
-	OwnerID   string
-	Name      string
-	Image     string
-	Status    ContainerStatus
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         string
+	DockerID   string
+	OwnerID    string
+	Name       string
+	Image      string
+	Status     ContainerStatus
+	Visibility Visibility
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // ContainerSpec describes a container to be created. It lives in domain
 // (not the container package) so service.DockerClient can reference it
 // without depending on the concrete Docker SDK wrapper.
 type ContainerSpec struct {
-	Image string
-	Name  string
-	Cmd   []string
-	Env   []string
+	Image      string
+	Name       string
+	Cmd        []string
+	Env        []string
+	Visibility Visibility
 }

@@ -268,6 +268,13 @@ a:hover {
   font-size: 12px;
 }
 
+.visibility-toggle {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
 .conn-indicator {
   font-weight: 500;
 }
