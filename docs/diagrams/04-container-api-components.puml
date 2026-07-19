@@ -38,8 +38,18 @@ package "internal/job" {
   [WorkerPool]
 }
 
-package "logsys" {
-  [LogManager]
+package "internal/wsstream" {
+  [ServeAppLogs]
+  [ServeContainerLogs]
+  [ServeContainerExec]
+}
+
+package "internal/rpc" {
+  [LogServiceHandler]
+}
+
+package "internal/applog" {
+  [Manager] as AppLogManager
 }
 
 Main --> AuthMiddleware
@@ -48,21 +58,29 @@ Main --> ErrorMiddleware
 Main --> ContainerHandler
 Main --> UploadHandler
 Main --> JobHandler
+Main --> ServeAppLogs
+Main --> ServeContainerLogs
+Main --> ServeContainerExec
+Main --> LogServiceHandler
 
-LoggingMiddleware --> LogManager : WriteLog(...)
+LoggingMiddleware --> AppLogManager : WriteLog(...)
 
 ContainerHandler --> ContainerService
 UploadHandler --> UploadService
 JobHandler --> JobService
+ServeContainerLogs --> ContainerService : StreamLogs (loosened: owner or public)
+ServeContainerExec --> ContainerService : Exec (strict: owner-only)
+ServeAppLogs --> AppLogManager : RegisterLogHandler (live WS tail)
+LogServiceHandler --> ContainerService : ReadLogs / ClearLogs / StreamContainerLogs\n(same service, gRPC/Connect transport)
 
 ContainerService --> ContainerRepository
 ContainerService --> DockerClientWrapper
-ContainerService --> JobQueue : enqueue long-running ops
+ContainerService --> JobQueue : enqueue long-running ops\n(create/start/stop/delete — see 06, 07)
 
 JobService --> JobQueue
 JobQueue --> WorkerPool
 WorkerPool --> ContainerService : execute deferred op
-WorkerPool --> LogManager : progress / error logs
+WorkerPool --> AppLogManager : progress / error logs
 
 ContainerRepository <|.. SQLiteContainerRepo
 ContainerRepository <|.. PostgresContainerRepo
@@ -71,6 +89,24 @@ note bottom of ContainerRepository
   Abstract data-access interface —
   swappable backend (SQLite <-> Postgres)
   satisfies the DB-abstraction requirement.
+end note
+
+note bottom of AppLogManager
+  internal/applog is a small, self-contained
+  logger with no external dependency — this
+  package used to import the standalone
+  logGO module directly; that dependency was
+  removed so conTogether and logGO could be
+  fully independent (logGO now integrates
+  only by pulling over conTogether's network
+  API, never by importing this package).
+end note
+
+note bottom of JobQueue
+  JobQueue and WorkerPool are both internal
+  details of the single job.Service type
+  (a channel + a fixed pool of worker
+  goroutines), not separate exported types.
 end note
 
 @enduml

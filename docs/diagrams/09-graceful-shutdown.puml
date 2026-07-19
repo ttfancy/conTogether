@@ -4,9 +4,8 @@ title Container API - Graceful Shutdown
 participant "OS Signal (SIGTERM/SIGINT)" as Signal
 participant Main
 participant "http.Server" as HTTPServer
-participant JobQueue
-participant WorkerPool
-participant LogManager
+participant "job.Service" as WorkerPool
+participant "applog.Manager" as LogManager
 
 Signal -> Main: signal received
 activate Main
@@ -18,16 +17,19 @@ HTTPServer -> HTTPServer: wait for in-flight HTTP requests to finish
 HTTPServer --> Main: done / ctx timeout
 deactivate HTTPServer
 
-Main -> JobQueue: StopAccepting()
-Main -> WorkerPool: Drain(ctx with timeout)
+Main -> WorkerPool: go func() { jobsDrained <- jobSvc.Close() }()
+note right: Close() itself takes no context/timeout —\nit closes the task channel (rejecting further\nSubmit calls) and blocks on a WaitGroup until\nevery already-queued job finishes.
 activate WorkerPool
-WorkerPool -> WorkerPool: let running jobs finish\n(reject new dequeues)
-WorkerPool --> Main: drained / timeout
+WorkerPool -> WorkerPool: let running jobs finish\n(task channel closed, no new dequeues)
+Main -> Main: select { case <-jobsDrained: ... \ncase <-time.After(shutdownTimeout): ... }
+note right: the timeout race lives in main(),\nnot inside Close() — a stuck Docker call\nmust not hang shutdown forever; if it fires,\nany job still running is abandoned mid-flight.
+WorkerPool --> Main: drained (or abandoned on timeout)
 deactivate WorkerPool
 
-Main -> LogManager: Flush() + Close()
 Main -> LogManager: WriteLog("INFO", "shutdown complete")
-Main -> Main: os.Exit(0)
+Main -> LogManager: Close()
+note right: Close() alone drains and stops the\nwrite-loop goroutine — there's no separate\nFlush(); see applog.Manager's race-free\nRWMutex-guarded close pattern. Called after\nthe last WriteLog, since a WriteLog after\nClose returns ErrClosed.
+Main -> Main: return (process exits when main() returns)
 deactivate Main
 
 @enduml

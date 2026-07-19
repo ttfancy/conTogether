@@ -4,9 +4,9 @@ title Container API - Concurrency Control (prevent conflicting ops on same conta
 actor "Client A" as A
 actor "Client B" as B
 participant ContainerService
-participant "Per-Container Lock\n(sync.Mutex / DB row lock)" as Lock
+participant "Per-Container Lock\n(in-process sync.Mutex,\none per container ID —\nno DB-level locking)" as Lock
 participant DockerClientWrapper
-participant LogManager
+participant "applog.Manager" as LogManager
 
 A -> ContainerService: DeleteContainer(id)
 activate ContainerService
@@ -22,6 +22,7 @@ note right: blocks until A's operation\nreleases the lock for this container ID
 
 ContainerService -> DockerClientWrapper: ContainerRemove(id)
 DockerClientWrapper --> ContainerService: ok
+ContainerService -> ContainerService: repo.Delete(id)
 ContainerService -> Lock: Release(id)
 deactivate Lock
 ContainerService -> LogManager: WriteLog("INFO", "container deleted")
@@ -29,9 +30,9 @@ ContainerService --> A: 200 OK
 deactivate ContainerService
 
 Lock --> ContainerService: acquired (B's turn)
-ContainerService -> ContainerService: re-check container state
+ContainerService -> ContainerService: mustOwnContainer(ownerID, id)\n(re-reads the repo — this is where\nthe delete actually becomes visible to B)
 alt container no longer exists
-  ContainerService --> B: 409 Conflict "container was deleted"
+  ContainerService --> B: 404 Not Found\n(service.ErrNotFound; NOT 409 — that\nstatus is reserved for the create-time\nduplicate-name case, domain.ErrContainerNameConflict)
 else exists
   ContainerService -> DockerClientWrapper: ContainerStart(id)
   DockerClientWrapper --> ContainerService: ok
@@ -39,5 +40,20 @@ else exists
 end
 ContainerService -> Lock: Release(id)
 deactivate ContainerService
+
+note bottom
+  This is the exact scenario from the spec:
+  "避免同時刪除與啟動同一個容器" (avoid
+  simultaneous delete + start on the same
+  container). The same per-container-ID lock
+  also serializes StopContainer and
+  SetVisibility against each other and against
+  Start/Delete — not just the two operations
+  shown here. See TestConcurrentStartAndDelete
+  (run with -race) for the test that actually
+  proves this: every concurrent Start either
+  succeeds or fails with ErrNotFound, never
+  anything else, and Delete always wins.
+end note
 
 @enduml

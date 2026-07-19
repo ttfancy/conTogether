@@ -3,37 +3,53 @@ title Container API - Async Job Processing (e.g. long-running container op)
 
 actor Client
 participant JobHandler
-participant JobService
-participant JobQueue
-participant WorkerPool
+participant JobService as "job.Service"
+queue "tasks chan" as Queue
+participant Worker as "worker goroutine"
 participant ContainerService
-participant LogManager
+participant "applog.Manager" as LogManager
 
 Client -> JobHandler: POST /containers/{id}/start
-JobHandler -> JobService: SubmitJob(op="start", containerID)
+JobHandler -> JobService: Submit(ctx, ownerID, containerID, op="start_container")
 activate JobService
+JobService -> JobService: MustOwnContainer(ownerID, containerID)\n(fail fast, synchronously, if not found/forbidden)
 JobService -> JobService: create Job{ID: uuid, status="pending"}
-JobService -> JobQueue: enqueue(job)
+JobService -> Queue: enqueue(task)
 JobService --> JobHandler: Job{ID}
 deactivate JobService
 JobHandler --> Client: 202 Accepted {jobId}
 
 == Background processing ==
-activate WorkerPool
-WorkerPool -> JobQueue: dequeue(job)
-WorkerPool -> WorkerPool: mark job status="running"
-WorkerPool -> ContainerService: StartContainer(containerID)
+activate Worker
+Worker -> Queue: dequeue(task)
+Worker -> Worker: mark job status="running"
+Worker -> ContainerService: StartContainer(ctx, ownerID, containerID)
 activate ContainerService
-ContainerService --> WorkerPool: ok / error
+ContainerService --> Worker: ok / error
 deactivate ContainerService
-WorkerPool -> WorkerPool: mark job status="done" / "failed"
-WorkerPool -> LogManager: WriteLog("INFO"/"ERROR", job result)
-deactivate WorkerPool
+Worker -> Worker: mark job status="done" / "failed"
+Worker -> LogManager: WriteLog("INFO"/"ERROR", job result)
+deactivate Worker
 
 == Client polls for result ==
 Client -> JobHandler: GET /jobs/{jobId}
-JobHandler -> JobService: GetJobStatus(jobId)
-JobService --> JobHandler: Job{status, result/error}
-JobHandler --> Client: 200 {status, result}
+JobHandler -> JobService: GetJob(ctx, jobId)
+JobService --> JobHandler: Job{status, stage, error}
+JobHandler --> Client: 200 {status, stage, error}
+
+note right of JobService
+  Submit is shared by start/stop/delete —
+  each needs only an existing containerID,
+  no extra payload. Creating a container uses
+  a separate method, SubmitCreate(ctx, ownerID,
+  containerID, spec), because it also needs
+  the ContainerSpec the worker will actually
+  create with, and its job additionally
+  reports a Stage ("pulling image" / "creating
+  container") while running — see
+  06-create-container.puml for that flow in
+  full; the queue/worker/poll shape here is
+  identical either way.
+end note
 
 @enduml

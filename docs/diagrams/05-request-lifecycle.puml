@@ -9,7 +9,7 @@ participant AuthMiddleware
 participant Handler
 participant Service
 participant "Repository / Docker" as Backend
-participant LogManager
+participant "applog.Manager" as LogManager
 
 Client -> Router: HTTP request
 Router -> LoggingMiddleware: enter

@@ -1,6 +1,6 @@
 # conTogether
 
-- **[`container-api/`](container-api/README.md)** — a RESTful API for managing per-user Docker containers, with its own small operational logger (`internal/applog`).
+- **[`container-api/`](container-api/README.md)** — a RESTful API for managing per-user Docker containers, with its own small operational logger (`internal/applog`). See [`container-api/ARCHITECTURE.md`](container-api/ARCHITECTURE.md) for the full design writeup.
 - **[`web/`](web/README.md)** — a React dashboard for `container-api`: containers, uploads, and both log views. Not a separate deployable — `container-api` embeds the built output directly into its own binary (`internal/webui`), so it's one process, one port, in production.
 
 **[`logGO`](https://github.com/ttfancy/logGO)** is a separate, independent

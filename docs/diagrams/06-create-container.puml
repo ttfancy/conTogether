@@ -1,26 +1,77 @@
 @startuml
-title Container API - Create Container (Synchronous Path)
+title Container API - Create Container (Asynchronous, like Start/Stop/Delete)
 
 actor Client
 participant ContainerHandler
 participant ContainerService
 participant ContainerRepository
+participant JobService
+participant "job.Service worker" as Worker
 participant DockerClientWrapper
-participant LogManager
+participant "applog.Manager" as LogManager
 
 Client -> ContainerHandler: POST /containers {image, name, ...}
 ContainerHandler -> ContainerHandler: bind & validate request body
-ContainerHandler -> ContainerService: CreateContainer(ctx, spec)
+ContainerHandler -> ContainerService: BeginCreateContainer(ctx, ownerID, spec)
 activate ContainerService
-ContainerService -> DockerClientWrapper: CreateContainer(spec)
+ContainerService -> ContainerRepository: Save(record{id, owner, status="pending", docker_id=""})
+ContainerService --> ContainerHandler: Container{status: pending}
+deactivate ContainerService
+
+ContainerHandler -> JobService: SubmitCreate(ctx, ownerID, containerID, spec)
+activate JobService
+JobService -> JobService: create Job{ID: uuid, op="create_container", status="pending"}
+JobService -> JobService: enqueue task{containerID, spec}
+JobService --> ContainerHandler: Job{ID}
+deactivate JobService
+ContainerHandler --> Client: 202 Accepted {..., status: "pending", job_id}
+
+== Background processing (job.Service worker) ==
+activate Worker
+Worker -> Worker: mark job status="running", stage="creating container"
+Worker -> ContainerService: CreateContainer(ctx, ownerID, containerID, spec, reportStage)
+activate ContainerService
+ContainerService -> DockerClientWrapper: CreateContainer(spec, onPulling)
 activate DockerClientWrapper
 DockerClientWrapper -> DockerClientWrapper: docker SDK ContainerCreate()
-DockerClientWrapper --> ContainerService: containerID
+alt image not found locally
+  DockerClientWrapper -> Worker: onPulling() --> reportStage("pulling image")
+  Worker -> Worker: update job stage="pulling image"
+  DockerClientWrapper -> DockerClientWrapper: ImagePull(image), then retry ContainerCreate()
+end
+DockerClientWrapper --> ContainerService: dockerID (or error)
 deactivate DockerClientWrapper
-ContainerService -> ContainerRepository: Save(record{containerID, owner, status="created"})
-ContainerService -> LogManager: WriteLog("INFO", "container created")
-ContainerService --> ContainerHandler: ContainerDTO
+
+alt create succeeded
+  ContainerService -> ContainerRepository: SetDockerID(containerID, dockerID)
+  ContainerService -> ContainerRepository: UpdateStatus(containerID, "created")
+  ContainerService -> LogManager: WriteLog("INFO", "container created")
+  ContainerService --> Worker: nil
+else create failed (e.g. bad image, pull error)
+  ContainerService -> ContainerRepository: UpdateStatus(containerID, "failed")
+  ContainerService --> Worker: error
+end
 deactivate ContainerService
-ContainerHandler --> Client: 201 Created {id, status}
+
+Worker -> Worker: mark job status="done" / "failed" (err message if any)
+Worker -> LogManager: WriteLog("INFO"/"ERROR", job result)
+deactivate Worker
+
+== Client polls for result (same pattern as start/stop/delete, see 07) ==
+Client -> ContainerHandler: GET /jobs/{jobId}
+ContainerHandler -> JobService: GetJob(jobId)
+JobService --> ContainerHandler: Job{status, stage, error}
+ContainerHandler --> Client: 200 {status, stage, error}
+
+note right of ContainerHandler
+  Creation used to be one synchronous call
+  returning 201 immediately. It's async now,
+  same shape as start/stop/delete: an image
+  that isn't already cached locally can take
+  real time to pull, and a single blocking
+  HTTP request isn't how the rest of this API
+  handles anything else that's potentially
+  slow — see 07-async-job.puml.
+end note
 
 @enduml

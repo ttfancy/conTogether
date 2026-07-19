@@ -9,7 +9,7 @@ file uploads, async job status, all behind API-key auth.
 cmd/server        composition root — the only place every concrete type is known
 internal/handler   HTTP layer: bind/validate requests, call a service, shape responses
 internal/service   business logic: ownership checks, per-container concurrency lock
-internal/job       async job queue + worker pool (start/stop/delete run here)
+internal/job       async job queue + worker pool (create/start/stop/delete run here)
 internal/repository  persistence — SQLite and Postgres, chosen at runtime via config
 internal/migrations  versioned schema migrations, embedded, applied by both repos
 internal/container   Docker Engine SDK wrapper
@@ -22,9 +22,10 @@ internal/genproto    generated code from proto/logsys/v1/logsys.proto (buf gener
 internal/webui       embeds the built frontend (../web), serves it with SPA fallback
 ```
 
-Diagrams in [`../docs/diagrams/`](../docs/diagrams/): `04-container-api-components.puml`
-(full layer map), `05-request-lifecycle.puml` (middleware chain), `06-create-container.puml`,
-`07-async-job.puml`, `08-concurrency-control.puml`, `09-graceful-shutdown.puml`.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design explanation —
+layering rationale, the async job/create system, the authorization model,
+multi-protocol log delivery, and a diagram index — this section is just the
+quick map.
 
 ### Dependency injection
 
@@ -42,16 +43,27 @@ above it never knows which one it's talking to. See `internal/*/​*_test.go`
 for how this same seam makes unit testing possible without a real database or
 Docker daemon.
 
-### Why start/stop/delete are asynchronous
+### Why create/start/stop/delete are all asynchronous
 
-`POST /containers/{id}/start`, `/stop`, and `DELETE /containers/{id}` all
-submit a job and return `202` with a Job ID immediately — the actual Docker
-call happens on a worker pool (`internal/job`), and the client polls
-`GET /jobs/{jobId}` for completion. Ownership/existence errors (403/404) are
-still checked *synchronously* inside `Submit`, before the job is even queued
-— those are already known at submission time, so returning them immediately
-is both correct and better UX than making the client poll to discover a
-request was invalid all along.
+`POST /containers`, `POST /containers/{id}/start`, `/stop`, and
+`DELETE /containers/{id}` all submit a job and return `202` with a Job ID
+immediately — the actual Docker call happens on a worker pool
+(`internal/job`), and the client polls `GET /jobs/{jobId}` for completion.
+Ownership/existence errors (403/404) are still checked *synchronously*
+inside `Submit`/`SubmitCreate`, before the job is even queued — those are
+already known at submission time, so returning them immediately is both
+correct and better UX than making the client poll to discover a request was
+invalid all along.
+
+Create is the newest of the four to become async, and for a concrete
+reason: `CreateContainer` auto-pulls the image if the daemon doesn't already
+have it (see `internal/container/docker.go`), which can take real time for
+anything not already cached — a single blocking HTTP request isn't how the
+rest of this API handles anything potentially slow. While a create job runs,
+`GET /jobs/{jobId}` reports a `stage` field alongside `status` —
+`"creating container"` or `"pulling image"` — so the caller can show real
+progress instead of a spinner with no information. See
+`06-create-container.puml`.
 
 ### Concurrency control
 
@@ -107,6 +119,20 @@ Auth: every route except `/healthz` and `/swagger/*` requires an
 ```bash
 curl -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
   -d '{"image":"alpine","name":"web"}' http://localhost:8080/containers
+# => 202 Accepted
+# {"id":"...","owner_id":"dev-user","name":"web","image":"alpine",
+#  "status":"pending","visibility":"private","is_owner":true,
+#  "job_id":"..."}
+```
+
+That returns immediately with `status: "pending"` and a `job_id` — the
+actual Docker work (including pulling `alpine` if it isn't already cached)
+happens in the background. Poll the job to watch it progress and finish:
+
+```bash
+curl -H "X-API-Key: dev-key" http://localhost:8080/jobs/<job_id>
+# while running, e.g.: {"id":"...","status":"running","stage":"pulling image"}
+# once finished:        {"id":"...","status":"done"}
 ```
 
 ### Switching the database backend
@@ -243,15 +269,24 @@ make docs
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/healthz` | No auth |
-| POST | `/containers` | Create — synchronous |
-| GET | `/containers` | List the authenticated owner's containers |
+| POST | `/containers` | Async — returns 202 + Job ID (see "Why create/start/stop/delete are all asynchronous" above) |
+| GET | `/containers` | List everything the owner can see (their own, plus everyone's public ones) — synchronous |
 | GET | `/containers/{id}` | Get — synchronous |
+| PUT | `/containers/{id}/visibility` | Change private/public — synchronous, owner-only |
 | POST | `/containers/{id}/start` | Async — returns 202 + Job ID |
 | POST | `/containers/{id}/stop` | Async — returns 202 + Job ID |
 | DELETE | `/containers/{id}` | Async — returns 202 + Job ID |
-| GET | `/jobs/{jobId}` | Poll job status |
-| POST | `/uploads` | Multipart file upload |
-| WS | `GET /ws/containers/{id}/exec` | Interactive terminal — see below |
+| GET | `/containers/{id}/logs/stream` | Server-Sent Events tail of the container's own stdout/stderr |
+| WS | `/ws/containers/{id}/logs` | Same container-log tail, over a WebSocket instead of SSE |
+| WS | `/ws/containers/{id}/exec` | Interactive terminal — see below |
+| GET | `/jobs/{jobId}` | Poll job status (`status`, and for create jobs, `stage`) |
+| POST | `/uploads` | Multipart file upload, into a per-owner folder |
+| GET | `/uploads` | List everything the owner can see |
+| GET | `/uploads/{id}` | Download |
+| PUT | `/uploads/{id}/visibility` | Change private/public — owner-only |
+| GET | `/logs` / `DELETE /logs` | Read/clear conTogether's own operational log (`internal/applog`) |
+| WS | `/ws/logs` | Live tail of conTogether's own operational log |
+| gRPC/Connect | `LogService` (`proto/logsys/v1`) | `ReadLogs`/`ClearLogs`/`StreamContainerLogs` — same operations as above, over gRPC |
 
 ## Interactive terminal
 
@@ -373,11 +408,15 @@ whether `make frontend` has run (`internal/webui`).
 These are deliberate scope decisions for a project of this size, not
 oversights — noted here so they're explicit rather than discovered:
 
-- **Auth is a static API-key map** (`middleware.MapAPIKeyStore`), not
-  JWT/OAuth. It demonstrates the middleware pattern and resolves a key to an
-  owner ID (never trusting a client-supplied identity), but a real deployment
-  would back `middleware.APIKeyStore` with a database-backed lookup — no
-  other code would need to change.
+- **Auth is a single seeded API key, not self-service registration** — not
+  JWT/OAuth. It resolves a key to an owner ID (never trusting a
+  client-supplied identity) via `middleware.APIKeyStore`, backed by
+  `internal/repository.APIKeyRepo` — a real SQLite/Postgres table storing a
+  SHA-256 hash of the key, not the key itself, not just an in-memory map.
+  What's still missing is a way to *issue* additional keys — today the only
+  key that exists is the one `Seed`ed at boot from `DEV_API_KEY`; adding a
+  `POST /register`-style endpoint that inserts a new row via the same repo
+  would close this gap without changing anything else.
 - **Job status is in-memory only** (`job.MemoryStore`). A process restart
   loses a job's tracked status (the underlying Docker operation may have
   already completed) — the same interface swap to a durable store (e.g.
