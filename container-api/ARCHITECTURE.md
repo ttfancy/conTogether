@@ -169,12 +169,7 @@ A small, self-contained, dependency-free logger — async writes via a
 buffered channel, race-free `Close` (an `RWMutex` guards the
 check-then-send so `Close` can't race a send), an extension point
 (`RegisterLogHandler`) that both the WebSocket app-log tail and the gRPC
-`LogService` are built on. This package used to import the standalone
-`logGO` module directly; that dependency was removed so the two projects
-could be fully independent — `logGO` now integrates with conTogether only
-by pulling over its existing network API (`GET /logs`, `GET /ws/logs`),
-never by importing this package, and conTogether never imports `logGO`'s
-package either.
+`LogService` are built on.
 
 ## Graceful shutdown
 

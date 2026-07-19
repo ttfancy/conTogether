@@ -1,11 +1,7 @@
 // Package applog is container-api's own small, self-contained
 // operational logger — request lifecycle, container events, job
 // outcomes. It exists so container-api has no dependency on any
-// external logging module (in particular, not on logGO — see
-// https://github.com/ttfancy/logGO, which is an independent project in
-// its own right and integrates with container-api the other way
-// around, as a client of its existing log-reading endpoints, not as a
-// library container-api imports).
+// external logging module.
 //
 // The shape here (async write, level filtering, a handler extension
 // point) deliberately mirrors a well-understood logging design, but the

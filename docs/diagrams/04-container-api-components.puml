@@ -93,13 +93,7 @@ end note
 
 note bottom of AppLogManager
   internal/applog is a small, self-contained
-  logger with no external dependency — this
-  package used to import the standalone
-  logGO module directly; that dependency was
-  removed so conTogether and logGO could be
-  fully independent (logGO now integrates
-  only by pulling over conTogether's network
-  API, never by importing this package).
+  logger with no external dependency.
 end note
 
 note bottom of JobQueue

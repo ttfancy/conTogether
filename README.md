@@ -3,19 +3,6 @@
 - **[`container-api/`](container-api/README.md)** — a RESTful API for managing per-user Docker containers, with its own small operational logger (`internal/applog`). See [`container-api/ARCHITECTURE.md`](container-api/ARCHITECTURE.md) for the full design writeup.
 - **[`web/`](web/README.md)** — a React dashboard for `container-api`: containers, uploads, and both log views. Not a separate deployable — `container-api` embeds the built output directly into its own binary (`internal/webui`), so it's one process, one port, in production.
 
-**[`logGO`](https://github.com/ttfancy/logGO)** is a separate, independent
-project — a dependency-injected, asynchronous logging system with pluggable
-storage backends. It used to live in this repo as an in-module package
-(`logsys/`) that `container-api` imported directly; it's since moved out to
-its own repository, and container-api no longer imports it (or anything else
-external) for logging at all — see `container-api/internal/applog`, a small
-self-contained logger built for exactly this API's own needs. The two
-projects still relate, just the other way around now: `logGO` can run as its
-own log-aggregation service that connects to a running conTogether instance
-over the network (its existing `GET /logs` and `/ws/logs` endpoints) and
-displays what it collects on its own UI — see
-[`logGO`'s README](https://github.com/ttfancy/logGO#readme) for that.
-
 ## Requirements
 
 - Go 1.24+
@@ -109,6 +96,3 @@ See [`container-api/README.md`](container-api/README.md) for endpoints, auth, an
 ## Design diagrams
 
 [`docs/diagrams/`](docs/diagrams/) contains PlantUML component/sequence diagrams for `container-api` (component overview, request middleware chain, create-container flow, async job processing, concurrency control, graceful shutdown). View them with a PlantUML renderer (e.g. the VS Code PlantUML extension, or plantuml.com).
-
-`logGO`'s own structure/write-path/read-path diagrams moved with it — see
-[its `docs/diagrams/`](https://github.com/ttfancy/logGO/tree/main/docs/diagrams).
