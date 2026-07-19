@@ -85,11 +85,11 @@ func main() {
 	uploadSvc := upload.NewService(cfg.UploadsDir, logger, repos.uploads, newID)
 
 	// containerSvc satisfies job.ContainerOperator structurally (Start/
-	// Stop/DeleteContainer) — jobSvc is what actually executes an async
-	// container operation once a worker picks it off the queue.
+	// Stop/Delete/CreateContainer) — jobSvc is what actually executes an
+	// async container operation once a worker picks it off the queue.
 	jobSvc := job.NewService(job.NewMemoryStore(), containerSvc, logger, newID, cfg.JobWorkers, cfg.JobQueueSize)
 
-	containerHandler := handler.NewContainerHandler(containerSvc, containerSvc)
+	containerHandler := handler.NewContainerHandler(containerSvc, containerSvc, jobSvc)
 	uploadHandler := handler.NewUploadHandler(uploadSvc)
 	jobHandler := handler.NewJobHandler(jobSvc)
 	logHandler := handler.NewLogHandler(logger)

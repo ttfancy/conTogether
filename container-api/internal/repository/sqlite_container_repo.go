@@ -129,6 +129,14 @@ func (r *SQLiteContainerRepo) UpdateVisibility(ctx context.Context, id string, v
 	return err
 }
 
+func (r *SQLiteContainerRepo) SetDockerID(ctx context.Context, id, dockerID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE containers SET docker_id = ?, updated_at = ? WHERE id = ?`,
+		dockerID, time.Now().UnixNano(), id,
+	)
+	return err
+}
+
 func (r *SQLiteContainerRepo) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM containers WHERE id = ?`, id)
 	return err

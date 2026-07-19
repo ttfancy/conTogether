@@ -28,7 +28,7 @@ const docTemplate = `{
                 "tags": [
                     "containers"
                 ],
-                "summary": "List the authenticated owner's containers",
+                "summary": "List containers the authenticated owner can see (their own, plus everyone's public ones)",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -47,6 +47,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
+                "description": "Persists a placeholder container and submits a create job; poll GET /jobs/{jobId} for progress and completion.",
                 "consumes": [
                     "application/json"
                 ],
@@ -56,7 +57,7 @@ const docTemplate = `{
                 "tags": [
                     "containers"
                 ],
-                "summary": "Create a container",
+                "summary": "Create a container (asynchronous)",
                 "parameters": [
                     {
                         "description": "Container spec",
@@ -69,10 +70,10 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "201": {
-                        "description": "Created",
+                    "202": {
+                        "description": "Accepted",
                         "schema": {
-                            "$ref": "#/definitions/internal_handler.containerResponse"
+                            "$ref": "#/definitions/internal_handler.createContainerResponse"
                         }
                     },
                     "400": {
@@ -266,6 +267,69 @@ const docTemplate = `{
                 }
             }
         },
+        "/containers/{id}/visibility": {
+            "put": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "containers"
+                ],
+                "summary": "Change a container's visibility (owner-only)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Container ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Desired visibility",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.setVisibilityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.containerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/jobs/{jobId}": {
             "get": {
                 "security": [
@@ -415,6 +479,31 @@ const docTemplate = `{
             }
         },
         "/uploads": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uploads"
+                ],
+                "summary": "List uploads the authenticated owner can see (their own, plus everyone's public ones)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_handler.uploadResponse"
+                            }
+                        }
+                    }
+                }
+            },
             "post": {
                 "security": [
                     {
@@ -438,11 +527,62 @@ const docTemplate = `{
                         "name": "file",
                         "in": "formData",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "\\",
+                        "name": "visibility",
+                        "in": "formData"
                     }
                 ],
                 "responses": {
                     "201": {
                         "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.uploadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/uploads/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "tags": [
+                    "uploads"
+                ],
+                "summary": "Download an upload (owner, or anyone if it's public)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Upload ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -450,8 +590,71 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/uploads/{id}/visibility": {
+            "put": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "uploads"
+                ],
+                "summary": "Change an upload's visibility (owner-only)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Upload ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Desired visibility",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.setVisibilityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.uploadResponse"
+                        }
+                    },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -473,10 +676,20 @@ const docTemplate = `{
                 "image": {
                     "type": "string"
                 },
+                "is_owner": {
+                    "description": "IsOwner tells the frontend whether the caller may mutate this\ncontainer (start/stop/delete/change visibility) — computed here,\nnot left for the client to infer, since the client only knows its\nown API key, not the owner ID it resolves to.",
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
+                "owner_id": {
+                    "type": "string"
+                },
                 "status": {
+                    "type": "string"
+                },
+                "visibility": {
                     "type": "string"
                 }
             }
@@ -505,6 +718,40 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "visibility": {
+                    "description": "\"private\" (default) or \"public\"",
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.createContainerResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "is_owner": {
+                    "description": "IsOwner tells the frontend whether the caller may mutate this\ncontainer (start/stop/delete/change visibility) — computed here,\nnot left for the client to infer, since the client only knows its\nown API key, not the owner ID it resolves to.",
+                    "type": "boolean"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "visibility": {
+                    "type": "string"
                 }
             }
         },
@@ -515,6 +762,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
+                    "type": "string"
+                },
+                "stage": {
+                    "description": "Stage is only ever populated for a create job — see domain.Job's\ndoc comment.",
                     "type": "string"
                 },
                 "status": {
@@ -536,6 +787,44 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.setVisibilityRequest": {
+            "type": "object",
+            "required": [
+                "visibility"
+            ],
+            "properties": {
+                "visibility": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.uploadResponse": {
+            "type": "object",
+            "properties": {
+                "content_type": {
+                    "type": "string"
+                },
+                "filename": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_owner": {
+                    "description": "IsOwner mirrors containerResponse's — see its comment.",
+                    "type": "boolean"
+                },
+                "owner_id": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "visibility": {
                     "type": "string"
                 }
             }

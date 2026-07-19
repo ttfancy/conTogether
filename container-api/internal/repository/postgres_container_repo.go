@@ -130,6 +130,14 @@ func (r *PostgresContainerRepo) UpdateVisibility(ctx context.Context, id string,
 	return err
 }
 
+func (r *PostgresContainerRepo) SetDockerID(ctx context.Context, id, dockerID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE containers SET docker_id = $1, updated_at = $2 WHERE id = $3`,
+		dockerID, time.Now().UnixNano(), id,
+	)
+	return err
+}
+
 func (r *PostgresContainerRepo) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM containers WHERE id = $1`, id)
 	return err

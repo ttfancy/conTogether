@@ -6,6 +6,9 @@ const COLORS: Record<string, string> = {
   pending: '#8a8f98',
   done: '#2e9e5b',
   failed: '#b3261e',
+  // A container that was started but didn't stay running (no CMD to
+  // keep it alive) — distinct from "stopped" (an explicit action).
+  exited: '#c77d16',
 }
 
 export default function StatusBadge({ status }: { status: string }) {

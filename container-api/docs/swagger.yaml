@@ -6,9 +6,20 @@ definitions:
         type: string
       image:
         type: string
+      is_owner:
+        description: |-
+          IsOwner tells the frontend whether the caller may mutate this
+          container (start/stop/delete/change visibility) — computed here,
+          not left for the client to infer, since the client only knows its
+          own API key, not the owner ID it resolves to.
+        type: boolean
       name:
         type: string
+      owner_id:
+        type: string
       status:
+        type: string
+      visibility:
         type: string
     type: object
   internal_handler.createContainerRequest:
@@ -25,15 +36,47 @@ definitions:
         type: string
       name:
         type: string
+      visibility:
+        description: '"private" (default) or "public"'
+        type: string
     required:
     - image
     - name
+    type: object
+  internal_handler.createContainerResponse:
+    properties:
+      id:
+        type: string
+      image:
+        type: string
+      is_owner:
+        description: |-
+          IsOwner tells the frontend whether the caller may mutate this
+          container (start/stop/delete/change visibility) — computed here,
+          not left for the client to infer, since the client only knows its
+          own API key, not the owner ID it resolves to.
+        type: boolean
+      job_id:
+        type: string
+      name:
+        type: string
+      owner_id:
+        type: string
+      status:
+        type: string
+      visibility:
+        type: string
     type: object
   internal_handler.jobResponse:
     properties:
       error:
         type: string
       id:
+        type: string
+      stage:
+        description: |-
+          Stage is only ever populated for a create job — see domain.Job's
+          doc comment.
         type: string
       status:
         type: string
@@ -48,6 +91,31 @@ definitions:
       message:
         type: string
       timestamp:
+        type: string
+    type: object
+  internal_handler.setVisibilityRequest:
+    properties:
+      visibility:
+        type: string
+    required:
+    - visibility
+    type: object
+  internal_handler.uploadResponse:
+    properties:
+      content_type:
+        type: string
+      filename:
+        type: string
+      id:
+        type: string
+      is_owner:
+        description: IsOwner mirrors containerResponse's — see its comment.
+        type: boolean
+      owner_id:
+        type: string
+      size:
+        type: integer
+      visibility:
         type: string
     type: object
 info:
@@ -70,12 +138,15 @@ paths:
             type: array
       security:
       - ApiKeyAuth: []
-      summary: List the authenticated owner's containers
+      summary: List containers the authenticated owner can see (their own, plus everyone's
+        public ones)
       tags:
       - containers
     post:
       consumes:
       - application/json
+      description: Persists a placeholder container and submits a create job; poll
+        GET /jobs/{jobId} for progress and completion.
       parameters:
       - description: Container spec
         in: body
@@ -86,10 +157,10 @@ paths:
       produces:
       - application/json
       responses:
-        "201":
-          description: Created
+        "202":
+          description: Accepted
           schema:
-            $ref: '#/definitions/internal_handler.containerResponse'
+            $ref: '#/definitions/internal_handler.createContainerResponse'
         "400":
           description: Bad Request
           schema:
@@ -98,7 +169,7 @@ paths:
             type: object
       security:
       - ApiKeyAuth: []
-      summary: Create a container
+      summary: Create a container (asynchronous)
       tags:
       - containers
   /containers/{id}:
@@ -216,6 +287,46 @@ paths:
       summary: Stop a container (asynchronous)
       tags:
       - containers
+  /containers/{id}/visibility:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Container ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Desired visibility
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.setVisibilityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.containerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Change a container's visibility (owner-only)
+      tags:
+      - containers
   /jobs/{jobId}:
     get:
       parameters:
@@ -311,6 +422,22 @@ paths:
       tags:
       - logs
   /uploads:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_handler.uploadResponse'
+            type: array
+      security:
+      - ApiKeyAuth: []
+      summary: List uploads the authenticated owner can see (their own, plus everyone's
+        public ones)
+      tags:
+      - uploads
     post:
       consumes:
       - multipart/form-data
@@ -320,15 +447,17 @@ paths:
         name: file
         required: true
         type: file
+      - description: \
+        in: formData
+        name: visibility
+        type: string
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            $ref: '#/definitions/internal_handler.uploadResponse'
         "400":
           description: Bad Request
           schema:
@@ -338,6 +467,76 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: Upload a data file (CSV/JSON/image/code) to the user's folder
+      tags:
+      - uploads
+  /uploads/{id}:
+    get:
+      parameters:
+      - description: Upload ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Download an upload (owner, or anyone if it's public)
+      tags:
+      - uploads
+  /uploads/{id}/visibility:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Upload ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Desired visibility
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.setVisibilityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.uploadResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Change an upload's visibility (owner-only)
       tags:
       - uploads
 securityDefinitions:

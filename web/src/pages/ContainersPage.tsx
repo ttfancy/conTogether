@@ -14,6 +14,12 @@ import { useToast } from '../hooks/useToast'
 import type { Container, Visibility } from '../api/types'
 import StatusBadge from '../components/StatusBadge'
 
+// A fixed list rather than free text: a typo'd image name only surfaces
+// as an opaque failure once Docker tries (and fails) to pull it, well
+// after the create request already succeeded — picking from known-good
+// images avoids that class of error entirely.
+const IMAGE_OPTIONS = ['alpine', 'busybox', 'ubuntu', 'nginx', 'redis', 'postgres', 'python', 'node']
+
 export default function ContainersPage() {
   const { showToast } = useToast()
   const [containers, setContainers] = useState<Container[]>([])
@@ -93,15 +99,46 @@ export default function ContainersPage() {
       // (pipes, loops, quoting — whatever you'd type in a terminal)
       // rather than requiring the backend's exec-form []string directly.
       const cmd = command.trim() ? ['sh', '-c', command.trim()] : undefined
-      await createContainer({ image: image.trim(), name: name.trim(), cmd, visibility })
+      const created = await createContainer({ image: image.trim(), name: name.trim(), cmd, visibility })
       setName('')
       setCommand('')
-      showToast('Container created', 'success')
-      await refresh()
+      await refresh() // shows the new "pending" row immediately
+      // Not awaited: the actual Docker work (which can be slow if the
+      // image needs pulling) happens in the background via the job
+      // this kicked off, same as start/stop/delete — awaiting it here
+      // would block the form for however long that takes.
+      watchCreateJob(created.id, created.job_id)
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : 'Failed to create container', 'error')
     } finally {
       setCreating(false)
+    }
+  }
+
+  // Polls a create job's real progress ("pulling image" vs "creating
+  // container") the same way runAction already does for start/stop/
+  // delete — same pending-label-until-refresh shape, just kicked off
+  // right after the container's own placeholder row shows up.
+  async function watchCreateJob(containerID: string, jobID: string) {
+    setPending((p) => ({ ...p, [containerID]: 'creating' }))
+    try {
+      const done = await waitForJob(jobID, (j) =>
+        setPending((p) => ({ ...p, [containerID]: j.stage || j.status })),
+      )
+      if (done.status === 'failed') {
+        showToast(done.error || 'Failed to create container', 'error')
+      } else {
+        showToast('Container created', 'success')
+      }
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : 'Failed to create container', 'error')
+    } finally {
+      setPending((p) => {
+        const next = { ...p }
+        delete next[containerID]
+        return next
+      })
+      refresh()
     }
   }
 
@@ -128,11 +165,13 @@ export default function ContainersPage() {
       <h2>Containers</h2>
 
       <form className="card create-form" onSubmit={handleCreate}>
-        <input
-          value={image}
-          onChange={(e) => setImage(e.target.value)}
-          placeholder="image (e.g. alpine)"
-        />
+        <select value={image} onChange={(e) => setImage(e.target.value)}>
+          {IMAGE_OPTIONS.map((img) => (
+            <option key={img} value={img}>
+              {img}
+            </option>
+          ))}
+        </select>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name" />
         <input
           value={command}

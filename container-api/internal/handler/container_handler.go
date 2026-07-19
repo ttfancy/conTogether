@@ -20,9 +20,12 @@ import (
 // handler needs, expressed as an interface so handler tests can inject a
 // fake instead of a real service+repository+Docker stack. Start/Stop/
 // Delete are NOT here: those go through JobHandler instead, since they
-// run asynchronously (see job.Service).
+// run asynchronously (see job.Service). BeginCreateContainer is here
+// (not the async CreateContainer job.ContainerOperator requires) — this
+// handler only ever kicks a create job off, never runs the Docker work
+// itself.
 type ContainerServicer interface {
-	CreateContainer(ctx context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error)
+	BeginCreateContainer(ctx context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error)
 	GetContainer(ctx context.Context, ownerID, id string) (*domain.Container, error)
 	ListContainers(ctx context.Context, ownerID string) ([]*domain.Container, error)
 	SetVisibility(ctx context.Context, ownerID, id string, visibility domain.Visibility) error
@@ -35,13 +38,22 @@ type ContainerLogStreamer interface {
 	StreamLogs(ctx context.Context, ownerID, id, tail string) (io.ReadCloser, error)
 }
 
+// CreateJobSubmitter is the one piece of job.Service this handler needs
+// directly (every other job op goes through JobHandler) — creating a
+// container needs both a fresh placeholder record (ContainerServicer,
+// above) and a job to actually do the Docker work, in the same request.
+type CreateJobSubmitter interface {
+	SubmitCreate(ctx context.Context, ownerID, containerID string, spec domain.ContainerSpec) (*domain.Job, error)
+}
+
 type ContainerHandler struct {
 	svc     ContainerServicer
 	streams ContainerLogStreamer
+	jobs    CreateJobSubmitter
 }
 
-func NewContainerHandler(svc ContainerServicer, streams ContainerLogStreamer) *ContainerHandler {
-	return &ContainerHandler{svc: svc, streams: streams}
+func NewContainerHandler(svc ContainerServicer, streams ContainerLogStreamer, jobs CreateJobSubmitter) *ContainerHandler {
+	return &ContainerHandler{svc: svc, streams: streams, jobs: jobs}
 }
 
 type createContainerRequest struct {
@@ -82,14 +94,26 @@ type setVisibilityRequest struct {
 	Visibility string `json:"visibility" binding:"required"`
 }
 
+// createContainerResponse extends containerResponse with the ID of the
+// job actually doing the Docker-side work — the container itself comes
+// back immediately in "pending" status; the client polls GET
+// /jobs/{job_id} (see JobHandler.GetJob) the same way it already does
+// for start/stop/delete, watching Job.Stage for "pulling image" vs
+// "creating container".
+type createContainerResponse struct {
+	containerResponse
+	JobID string `json:"job_id"`
+}
+
 // CreateContainer godoc
-// @Summary      Create a container
+// @Summary      Create a container (asynchronous)
+// @Description  Persists a placeholder container and submits a create job; poll GET /jobs/{jobId} for progress and completion.
 // @Tags         containers
 // @Accept       json
 // @Produce      json
 // @Security     ApiKeyAuth
 // @Param        request body createContainerRequest true "Container spec"
-// @Success      201 {object} containerResponse
+// @Success      202 {object} createContainerResponse
 // @Failure      400 {object} map[string]string
 // @Router       /containers [post]
 func (h *ContainerHandler) CreateContainer(c *gin.Context) {
@@ -100,18 +124,34 @@ func (h *ContainerHandler) CreateContainer(c *gin.Context) {
 	}
 
 	ownerID := middleware.OwnerID(c.Request.Context())
-	container, err := h.svc.CreateContainer(c.Request.Context(), ownerID, domain.ContainerSpec{
+	spec := domain.ContainerSpec{
 		Image:      req.Image,
 		Name:       req.Name,
 		Cmd:        req.Cmd,
 		Env:        req.Env,
 		Visibility: domain.Visibility(req.Visibility),
-	})
+	}
+	container, err := h.svc.BeginCreateContainer(c.Request.Context(), ownerID, spec)
 	if err != nil {
 		c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, toResponse(container, ownerID))
+
+	// A failure here (queue full, or mid-shutdown) leaves the
+	// placeholder stuck in "pending" with no job ever running it — rare
+	// enough (both are edge cases, not a steady-state failure mode) that
+	// surfacing the error and leaving cleanup to the owner (delete and
+	// retry) is an acceptable tradeoff over adding recovery logic for it.
+	job, err := h.jobs.SubmitCreate(c.Request.Context(), ownerID, container.ID, spec)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusAccepted, createContainerResponse{
+		containerResponse: toResponse(container, ownerID),
+		JobID:             job.ID,
+	})
 }
 
 // GetContainer godoc

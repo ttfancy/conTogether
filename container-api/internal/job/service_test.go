@@ -15,12 +15,14 @@ import (
 )
 
 type recordingOperator struct {
-	mu        sync.Mutex
-	started   []string
-	stopped   []string
-	removed   []string
-	failOn    string // containerID that should fail every op
-	rejectGet string // containerID for which MustOwnContainer fails (simulates not-found/forbidden)
+	mu           sync.Mutex
+	started      []string
+	stopped      []string
+	removed      []string
+	created      []string
+	failOn       string // containerID that should fail every op
+	rejectGet    string // containerID for which MustOwnContainer fails (simulates not-found/forbidden)
+	pullOnCreate bool   // simulate CreateContainer taking the "pulling image" path
 }
 
 func (o *recordingOperator) MustOwnContainer(_ context.Context, _, id string) (*domain.Container, error) {
@@ -38,6 +40,13 @@ func (o *recordingOperator) StopContainer(_ context.Context, _, id string) error
 }
 func (o *recordingOperator) DeleteContainer(_ context.Context, _, id string) error {
 	return o.record(&o.removed, id)
+}
+
+func (o *recordingOperator) CreateContainer(_ context.Context, _, id string, _ domain.ContainerSpec, reportStage func(string)) error {
+	if o.pullOnCreate {
+		reportStage("pulling image")
+	}
+	return o.record(&o.created, id)
 }
 
 func (o *recordingOperator) record(slice *[]string, id string) error {
@@ -197,5 +206,57 @@ func TestCloseDrainsInFlightJobs(t *testing.T) {
 	defer op.mu.Unlock()
 	if len(op.removed) != len(ids) {
 		t.Fatalf("expected all %d jobs to have run before Close returned, got %d", len(ids), len(op.removed))
+	}
+}
+
+// TestSubmitCreateReportsStageAndCompletes is the reason Job.Stage
+// exists: a create job that ends up pulling an image should be visible
+// as "pulling image" while running (not just silence until it either
+// finishes or fails), then settle to Done like any other job.
+func TestSubmitCreateReportsStageAndCompletes(t *testing.T) {
+	op := &recordingOperator{pullOnCreate: true}
+	svc := job.NewService(job.NewMemoryStore(), op, testLogger(t), sequentialIDs(), 2, 10)
+	defer svc.Close()
+
+	j, err := svc.SubmitCreate(context.Background(), "owner-1", "ctr-new", domain.ContainerSpec{Image: "redis", Name: "web"})
+	if err != nil {
+		t.Fatalf("SubmitCreate failed: %v", err)
+	}
+
+	done := waitForStatus(t, svc, j.ID, domain.JobDone)
+	if done.Error != "" {
+		t.Fatalf("expected no error, got %q", done.Error)
+	}
+	if done.Stage != "pulling image" {
+		t.Fatalf("Stage = %q, want %q to have been recorded from the operator's reportStage call", done.Stage, "pulling image")
+	}
+
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if len(op.created) != 1 || op.created[0] != "ctr-new" {
+		t.Fatalf("expected CreateContainer to run once for ctr-new, got %+v", op.created)
+	}
+}
+
+// TestSubmitCreateFailFastUsesSameOwnershipCheck confirms SubmitCreate
+// shares Submit's synchronous MustOwnContainer pre-check — a create job
+// for a container BeginCreateContainer never actually saved (or owned
+// by someone else) should be rejected immediately, same as start/stop/
+// delete.
+func TestSubmitCreateFailFastUsesSameOwnershipCheck(t *testing.T) {
+	op := &recordingOperator{rejectGet: "ctr-forbidden"}
+	svc := job.NewService(job.NewMemoryStore(), op, testLogger(t), sequentialIDs(), 2, 10)
+	defer svc.Close()
+
+	_, err := svc.SubmitCreate(context.Background(), "owner-1", "ctr-forbidden", domain.ContainerSpec{Image: "alpine", Name: "web"})
+	if err == nil {
+		t.Fatal("expected SubmitCreate to fail synchronously for a rejected container")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if len(op.created) != 0 {
+		t.Fatalf("expected CreateContainer never to run, but got %+v", op.created)
 	}
 }

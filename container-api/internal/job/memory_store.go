@@ -55,3 +55,15 @@ func (s *MemoryStore) UpdateStatus(_ context.Context, id string, status domain.J
 	j.UpdatedAt = time.Now()
 	return nil
 }
+
+func (s *MemoryStore) UpdateStage(_ context.Context, id string, stage string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return fmt.Errorf("no such job: %s", id)
+	}
+	j.Stage = stage
+	j.UpdatedAt = time.Now()
+	return nil
+}

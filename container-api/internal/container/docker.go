@@ -34,11 +34,27 @@ func NewDockerWrapper() (*DockerWrapper, error) {
 	return &DockerWrapper{cli: cli}, nil
 }
 
-func (w *DockerWrapper) CreateContainer(ctx context.Context, spec domain.ContainerSpec) (string, error) {
-	resp, err := w.cli.ContainerCreate(ctx,
-		&dockercontainer.Config{Image: spec.Image, Cmd: spec.Cmd, Env: spec.Env},
-		nil, nil, nil, spec.Name,
-	)
+// CreateContainer creates spec's container, pulling its image first if
+// the daemon doesn't already have it — the daemon only reports a
+// missing image at create time, not before, so rather than make every
+// caller pre-pull, this pulls once and retries. Without this, any image
+// not already present locally (anything but whatever happens to be
+// cached, e.g. alpine in dev) surfaced as an opaque "internal server
+// error" instead of actually working. onPulling, if non-nil, is called
+// right before the pull starts — the caller's only way to know this
+// (potentially slow) path was taken, since it's not visible otherwise
+// until either step finishes.
+func (w *DockerWrapper) CreateContainer(ctx context.Context, spec domain.ContainerSpec, onPulling func()) (string, error) {
+	resp, err := w.createContainer(ctx, spec)
+	if errdefs.IsNotFound(err) {
+		if onPulling != nil {
+			onPulling()
+		}
+		if pullErr := w.pullImage(ctx, spec.Image); pullErr != nil {
+			return "", fmt.Errorf("pull image %q: %w", spec.Image, pullErr)
+		}
+		resp, err = w.createContainer(ctx, spec)
+	}
 	if err != nil {
 		// A name collision surfaces from the daemon as a 409 Conflict —
 		// translated to a sentinel here (rather than left as a raw Docker
@@ -53,12 +69,47 @@ func (w *DockerWrapper) CreateContainer(ctx context.Context, spec domain.Contain
 	return resp.ID, nil
 }
 
+func (w *DockerWrapper) createContainer(ctx context.Context, spec domain.ContainerSpec) (dockercontainer.CreateResponse, error) {
+	return w.cli.ContainerCreate(ctx,
+		&dockercontainer.Config{Image: spec.Image, Cmd: spec.Cmd, Env: spec.Env},
+		nil, nil, nil, spec.Name,
+	)
+}
+
+func (w *DockerWrapper) pullImage(ctx context.Context, image string) error {
+	rc, err := w.cli.ImagePull(ctx, image, types.ImagePullOptions{})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	// Pulling is asynchronous from the daemon's perspective until this
+	// stream is drained — ContainerCreate would otherwise race a pull
+	// that's still in progress.
+	_, err = io.Copy(io.Discard, rc)
+	return err
+}
+
 func (w *DockerWrapper) StartContainer(ctx context.Context, dockerID string) error {
 	return w.cli.ContainerStart(ctx, dockerID, dockercontainer.StartOptions{})
 }
 
 func (w *DockerWrapper) StopContainer(ctx context.Context, dockerID string) error {
 	return w.cli.ContainerStop(ctx, dockerID, dockercontainer.StopOptions{})
+}
+
+// IsRunning reports whether dockerID is actually running right now.
+// ContainerStart succeeding only means the daemon accepted the start
+// request — a container with no long-lived command (e.g. no CMD
+// override) runs and exits on its own almost immediately, which
+// ContainerStart itself never reports as an error. Called right after
+// StartContainer so the caller can tell the two cases apart instead of
+// reporting "running" for something that already isn't.
+func (w *DockerWrapper) IsRunning(ctx context.Context, dockerID string) (bool, error) {
+	info, err := w.cli.ContainerInspect(ctx, dockerID)
+	if err != nil {
+		return false, err
+	}
+	return info.State != nil && info.State.Running, nil
 }
 
 func (w *DockerWrapper) RemoveContainer(ctx context.Context, dockerID string) error {

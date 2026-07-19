@@ -42,21 +42,51 @@ func newFakeContainerService() *fakeContainerService {
 	}}
 }
 
-func (f *fakeContainerService) CreateContainer(_ context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error) {
+// BeginCreateContainer persists a pending placeholder — the fake's
+// equivalent of service.ContainerService.BeginCreateContainer. The
+// matching CreateContainer below (job.ContainerOperator's method,
+// invoked by the real job.Service through the genuine async pipeline
+// this test router wires up) is what actually flips it to Created.
+//
+// The map keeps its own copy, not the same pointer handed back to the
+// caller: the HTTP handler reads its returned container (building the
+// response) at the same time a job-worker goroutine can already be
+// running CreateContainer against the map's entry — aliasing the two
+// would be a real data race between that read and this mutation, not
+// just a theoretical one (caught by -race).
+func (f *fakeContainerService) BeginCreateContainer(_ context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	visibility := spec.Visibility
 	if visibility == "" {
 		visibility = domain.VisibilityPrivate
 	}
-	c := &domain.Container{ID: "ctr-" + spec.Name, OwnerID: ownerID, Name: spec.Name, Image: spec.Image, Status: domain.StatusCreated, Visibility: visibility}
-	f.containers[c.ID] = c
+	c := &domain.Container{ID: "ctr-" + spec.Name, OwnerID: ownerID, Name: spec.Name, Image: spec.Image, Status: domain.StatusPending, Visibility: visibility}
+	stored := *c
+	f.containers[c.ID] = &stored
 	return c, nil
+}
+
+func (f *fakeContainerService) CreateContainer(_ context.Context, _, id string, _ domain.ContainerSpec, _ func(string)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.containers[id]
+	if !ok {
+		return service.ErrNotFound
+	}
+	c.Status = domain.StatusCreated
+	return nil
 }
 
 // get is the strict owner-only check: used by Start/Stop/Delete (and
 // exposed as MustOwnContainer for job.ContainerOperator's pre-submit
-// check) — visibility never grants a non-owner the right to mutate.
+// check) — visibility never grants a non-owner the right to mutate. It
+// returns a copy, not the map's own *domain.Container — CreateContainer
+// (run from a job-worker goroutine) mutates that pointer's Status
+// concurrently with reads from HTTP-handling goroutines, so handing out
+// the alias itself, unguarded by f.mu past this call, is a real data
+// race (caught by -race once CreateContainer started actually mutating
+// anything — before it, nothing here ever wrote to a returned pointer).
 func (f *fakeContainerService) get(ownerID, id string) (*domain.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -67,11 +97,13 @@ func (f *fakeContainerService) get(ownerID, id string) (*domain.Container, error
 	if c.OwnerID != ownerID {
 		return nil, service.ErrForbidden
 	}
-	return c, nil
+	cp := *c
+	return &cp, nil
 }
 
 // getReadable is the loosened read check GetContainer/StreamLogs use:
-// owner, or anyone if the container is public.
+// owner, or anyone if the container is public. Returns a copy — see get's
+// comment on why that matters here.
 func (f *fakeContainerService) getReadable(ownerID, id string) (*domain.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -82,7 +114,8 @@ func (f *fakeContainerService) getReadable(ownerID, id string) (*domain.Containe
 	if c.OwnerID != ownerID && c.Visibility != domain.VisibilityPublic {
 		return nil, service.ErrForbidden
 	}
-	return c, nil
+	cp := *c
+	return &cp, nil
 }
 
 func (f *fakeContainerService) GetContainer(_ context.Context, ownerID, id string) (*domain.Container, error) {
@@ -99,7 +132,8 @@ func (f *fakeContainerService) ListContainers(_ context.Context, ownerID string)
 	var out []*domain.Container
 	for _, c := range f.containers {
 		if c.OwnerID == ownerID || c.Visibility == domain.VisibilityPublic {
-			out = append(out, c)
+			cp := *c
+			out = append(out, &cp)
 		}
 	}
 	return out, nil
@@ -190,7 +224,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		"owner-2-key": "owner-2",
 	}))
 	handler.RegisterRoutes(authGroup,
-		handler.NewContainerHandler(containerSvc, containerSvc),
+		handler.NewContainerHandler(containerSvc, containerSvc, jobSvc),
 		handler.NewUploadHandler(fakeUploader{}),
 		handler.NewJobHandler(jobSvc),
 		handler.NewLogHandler(logger),
@@ -247,25 +281,51 @@ func TestContainerRoutesRequireAuth(t *testing.T) {
 	}
 }
 
+// TestCreateAndGetContainer is the end-to-end version of container
+// creation becoming asynchronous: POST /containers returns 202 with a
+// job ID immediately, the container itself sitting at "pending" until
+// GET /jobs/{job_id} (the real job.Service pipeline this test router
+// wires up) reports done — the same shape start/stop/delete already
+// used.
 func TestCreateAndGetContainer(t *testing.T) {
 	router := newTestRouter(t)
 
 	body, _ := json.Marshal(map[string]any{"image": "alpine", "name": "web"})
 	createRec := doRequest(router, http.MethodPost, "/containers", "owner-1-key", body)
-	if createRec.Code != http.StatusCreated {
-		t.Fatalf("POST /containers = %d, want 201, body=%s", createRec.Code, createRec.Body.String())
+	if createRec.Code != http.StatusAccepted {
+		t.Fatalf("POST /containers = %d, want 202, body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if created["status"] != string(domain.StatusPending) {
+		t.Fatalf("status in create response = %v, want %q (pending, before the job runs)", created["status"], domain.StatusPending)
+	}
+	jobID, _ := created["job_id"].(string)
+	if jobID == "" {
+		t.Fatalf("expected a job_id in the create response, got %+v", created)
 	}
 
-	getRec := doRequest(router, http.MethodGet, "/containers/ctr-existing", "owner-1-key", nil)
+	job := waitForJobStatus(t, router, "owner-1-key", jobID)
+	if job["status"] != "done" {
+		t.Fatalf("create job = %+v, want status done", job)
+	}
+	if job["stage"] != "creating container" {
+		t.Fatalf("create job stage = %v, want %q to have made it through the JSON response", job["stage"], "creating container")
+	}
+
+	id, _ := created["id"].(string)
+	getRec := doRequest(router, http.MethodGet, "/containers/"+id, "owner-1-key", nil)
 	if getRec.Code != http.StatusOK {
-		t.Fatalf("GET /containers/ctr-existing = %d, want 200, body=%s", getRec.Code, getRec.Body.String())
+		t.Fatalf("GET /containers/%s = %d, want 200, body=%s", id, getRec.Code, getRec.Body.String())
 	}
 	var resp map[string]any
 	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid JSON response: %v", err)
 	}
-	if resp["id"] != "ctr-existing" {
-		t.Fatalf("unexpected response body: %+v", resp)
+	if resp["status"] != string(domain.StatusCreated) {
+		t.Fatalf("status after job done = %v, want %q", resp["status"], domain.StatusCreated)
 	}
 }
 
@@ -545,8 +605,8 @@ func TestPublicContainerReadableByOtherOwnerButNotMutable(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]any{"image": "alpine", "name": "shared", "visibility": "public"})
 	createRec := doRequest(router, http.MethodPost, "/containers", "owner-1-key", body)
-	if createRec.Code != http.StatusCreated {
-		t.Fatalf("POST /containers (public) = %d, want 201, body=%s", createRec.Code, createRec.Body.String())
+	if createRec.Code != http.StatusAccepted {
+		t.Fatalf("POST /containers (public) = %d, want 202, body=%s", createRec.Code, createRec.Body.String())
 	}
 	var created map[string]any
 	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {

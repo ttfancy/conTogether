@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/applog"
+	"contogether/container-api/internal/domain"
 )
 
 var (
@@ -34,18 +34,28 @@ type ContainerRepository interface {
 	ListVisibleTo(ctx context.Context, ownerID string) ([]*domain.Container, error)
 	UpdateStatus(ctx context.Context, id string, status domain.ContainerStatus) error
 	UpdateVisibility(ctx context.Context, id string, visibility domain.Visibility) error
+	// SetDockerID records the real Docker container ID once
+	// FinishCreateContainer's async Docker work actually creates one —
+	// BeginCreateContainer's placeholder row doesn't have one yet.
+	SetDockerID(ctx context.Context, id, dockerID string) error
 	Delete(ctx context.Context, id string) error
 }
 
 // DockerClient is the container-runtime seam ContainerService needs.
 // Satisfied by container.DockerWrapper.
 type DockerClient interface {
-	CreateContainer(ctx context.Context, spec domain.ContainerSpec) (string, error)
+	// CreateContainer's onPulling callback is how ContainerService
+	// reports the "pulling image" job stage — see (*ContainerService).CreateContainer.
+	CreateContainer(ctx context.Context, spec domain.ContainerSpec, onPulling func()) (string, error)
 	StartContainer(ctx context.Context, dockerID string) error
 	StopContainer(ctx context.Context, dockerID string) error
 	RemoveContainer(ctx context.Context, dockerID string) error
 	StreamLogs(ctx context.Context, dockerID, tail string) (io.ReadCloser, error)
 	ExecContainer(ctx context.Context, dockerID string) (domain.ExecSession, error)
+	// IsRunning is checked right after StartContainer to catch a
+	// container that exited on its own instead of staying up — see
+	// (*ContainerService).StartContainer.
+	IsRunning(ctx context.Context, dockerID string) (bool, error)
 }
 
 // IDGenerator produces a new unique ID; injected so tests can supply a
@@ -73,7 +83,14 @@ func NewContainerService(repo ContainerRepository, docker DockerClient, logger *
 	}
 }
 
-func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error) {
+// BeginCreateContainer validates spec and persists a placeholder record
+// (Status = StatusPending, no DockerID yet) so the caller — the HTTP
+// handler — has a real container ID to hand back and a job to submit
+// against, immediately. The actual Docker work happens separately, in
+// CreateContainer below, run asynchronously by a job worker: this split
+// is what lets the client poll for progress instead of one HTTP request
+// blocking for however long an image pull takes.
+func (s *ContainerService) BeginCreateContainer(ctx context.Context, ownerID string, spec domain.ContainerSpec) (*domain.Container, error) {
 	visibility := spec.Visibility
 	if visibility == "" {
 		visibility = domain.VisibilityPrivate
@@ -82,27 +99,13 @@ func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, 
 		return nil, fmt.Errorf("%w: invalid visibility %q", ErrInvalidVisibility, spec.Visibility)
 	}
 
-	dockerID, err := s.docker.CreateContainer(ctx, spec)
-	if err != nil {
-		if errors.Is(err, domain.ErrContainerNameConflict) {
-			// Returned bare, not wrapped with the "create docker
-			// container: " prefix below: this message reaches the client
-			// as-is (see middleware.Error), and that prefix is internal
-			// framing a user asking to rename their container has no use
-			// for.
-			return nil, err
-		}
-		return nil, fmt.Errorf("create docker container: %w", err)
-	}
-
 	now := time.Now()
 	c := &domain.Container{
 		ID:         s.newID(),
-		DockerID:   dockerID,
 		OwnerID:    ownerID,
 		Name:       spec.Name,
 		Image:      spec.Image,
-		Status:     domain.StatusCreated,
+		Status:     domain.StatusPending,
 		Visibility: visibility,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -110,10 +113,42 @@ func (s *ContainerService) CreateContainer(ctx context.Context, ownerID string, 
 	if err := s.repo.Save(ctx, c); err != nil {
 		return nil, fmt.Errorf("save container record: %w", err)
 	}
+	return c, nil
+}
+
+// CreateContainer does the actual Docker-side work for a container
+// BeginCreateContainer already persisted a placeholder for: it's the
+// method job.ContainerOperator requires, called from a job worker once
+// it picks the task off the queue, never directly from the HTTP layer.
+// reportStage is forwarded to the Docker client as its onPulling
+// callback, so a caller polling the job sees "pulling image" for
+// however long that takes, not just silence until the whole thing
+// finishes.
+func (s *ContainerService) CreateContainer(ctx context.Context, ownerID, containerID string, spec domain.ContainerSpec, reportStage func(string)) error {
+	dockerID, err := s.docker.CreateContainer(ctx, spec, func() { reportStage("pulling image") })
+	if err != nil {
+		_ = s.repo.UpdateStatus(ctx, containerID, domain.StatusFailed)
+		if errors.Is(err, domain.ErrContainerNameConflict) {
+			// Returned bare, not wrapped with the "create docker
+			// container: " prefix below: this message reaches the client
+			// as-is (see middleware.Error), and that prefix is internal
+			// framing a user asking to rename their container has no use
+			// for.
+			return err
+		}
+		return fmt.Errorf("create docker container: %w", err)
+	}
+
+	if err := s.repo.SetDockerID(ctx, containerID, dockerID); err != nil {
+		return fmt.Errorf("save docker id: %w", err)
+	}
+	if err := s.repo.UpdateStatus(ctx, containerID, domain.StatusCreated); err != nil {
+		return fmt.Errorf("update status: %w", err)
+	}
 
 	_ = s.logger.WriteLog("INFO", "container created",
-		applog.F("container_id", c.ID), applog.F("owner_id", ownerID))
-	return c, nil
+		applog.F("container_id", containerID), applog.F("owner_id", ownerID))
+	return nil
 }
 
 // GetContainer returns c if ownerID owns it OR it's public — a read
@@ -229,10 +264,21 @@ func (s *ContainerService) StartContainer(ctx context.Context, ownerID, id strin
 		if err := s.docker.StartContainer(ctx, c.DockerID); err != nil {
 			return fmt.Errorf("start docker container: %w", err)
 		}
-		if err := s.repo.UpdateStatus(ctx, id, domain.StatusRunning); err != nil {
+
+		// ContainerStart succeeding doesn't mean the process stayed up —
+		// a container with no long-lived command (no CMD override) runs
+		// and exits on its own almost immediately. An IsRunning error
+		// here isn't itself a failure of Start (the daemon did start
+		// it) — fall back to the prior default (assume it's running)
+		// rather than fail the whole operation over a follow-up check.
+		status := domain.StatusRunning
+		if running, checkErr := s.docker.IsRunning(ctx, c.DockerID); checkErr == nil && !running {
+			status = domain.StatusExited
+		}
+		if err := s.repo.UpdateStatus(ctx, id, status); err != nil {
 			return fmt.Errorf("update status: %w", err)
 		}
-		_ = s.logger.WriteLog("INFO", "container started", applog.F("container_id", id))
+		_ = s.logger.WriteLog("INFO", "container started", applog.F("container_id", id), applog.F("status", string(status)))
 		return nil
 	})
 }

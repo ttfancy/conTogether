@@ -29,11 +29,14 @@ func NewJobHandler(jobs JobService) *JobHandler {
 type jobResponse struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	// Stage is only ever populated for a create job — see domain.Job's
+	// doc comment.
+	Stage string `json:"stage,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 func toJobResponse(j *domain.Job) jobResponse {
-	return jobResponse{ID: j.ID, Status: string(j.Status), Error: j.Error}
+	return jobResponse{ID: j.ID, Status: string(j.Status), Stage: j.Stage, Error: j.Error}
 }
 
 func (h *JobHandler) submit(c *gin.Context, op domain.JobOp) {

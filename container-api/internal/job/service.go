@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"contogether/container-api/internal/domain"
 	"contogether/container-api/internal/applog"
+	"contogether/container-api/internal/domain"
 )
 
 var (
@@ -37,6 +37,11 @@ type ContainerOperator interface {
 	StartContainer(ctx context.Context, ownerID, containerID string) error
 	StopContainer(ctx context.Context, ownerID, containerID string) error
 	DeleteContainer(ctx context.Context, ownerID, containerID string) error
+	// CreateContainer does the actual Docker work for a container
+	// SubmitCreate already persisted a placeholder record for.
+	// reportStage lets it surface sub-status (e.g. "pulling image")
+	// while running, via Service.execute wiring it to Store.UpdateStage.
+	CreateContainer(ctx context.Context, ownerID, containerID string, spec domain.ContainerSpec, reportStage func(string)) error
 }
 
 // Store persists Job records so status survives across GetJob polls.
@@ -46,6 +51,10 @@ type Store interface {
 	Save(ctx context.Context, j *domain.Job) error
 	FindByID(ctx context.Context, id string) (*domain.Job, error)
 	UpdateStatus(ctx context.Context, id string, status domain.JobStatus, errMsg string) error
+	// UpdateStage records Job.Stage without touching Status/Error — a
+	// separate call from UpdateStatus since a job can move through
+	// several stages while still just "running".
+	UpdateStage(ctx context.Context, id string, stage string) error
 }
 
 type task struct {
@@ -53,6 +62,9 @@ type task struct {
 	op          domain.JobOp
 	ownerID     string
 	containerID string
+	// spec is only populated for OpCreateContainer — start/stop/delete
+	// operate on a container that already fully exists.
+	spec domain.ContainerSpec
 }
 
 // Service submits jobs to a fixed-size worker pool. Close uses the same
@@ -98,6 +110,18 @@ func NewService(store Store, operator ContainerOperator, logger *applog.Manager,
 // Submit could have told it up front. Only the actual container
 // operation is asynchronous.
 func (s *Service) Submit(ctx context.Context, ownerID, containerID string, op domain.JobOp) (*domain.Job, error) {
+	return s.submit(ctx, ownerID, containerID, op, domain.ContainerSpec{})
+}
+
+// SubmitCreate is Submit's counterpart for OpCreateContainer: the same
+// fire-and-poll shape, but it also needs the ContainerSpec to actually
+// create with (start/stop/delete need only the containerID, already
+// fully persisted by the time they're submitted).
+func (s *Service) SubmitCreate(ctx context.Context, ownerID, containerID string, spec domain.ContainerSpec) (*domain.Job, error) {
+	return s.submit(ctx, ownerID, containerID, domain.OpCreateContainer, spec)
+}
+
+func (s *Service) submit(ctx context.Context, ownerID, containerID string, op domain.JobOp, spec domain.ContainerSpec) (*domain.Job, error) {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	if s.closed {
@@ -118,7 +142,7 @@ func (s *Service) Submit(ctx context.Context, ownerID, containerID string, op do
 	}
 
 	select {
-	case s.tasks <- task{jobID: j.ID, op: op, ownerID: ownerID, containerID: containerID}:
+	case s.tasks <- task{jobID: j.ID, op: op, ownerID: ownerID, containerID: containerID, spec: spec}:
 		return j, nil
 	default:
 		_ = s.store.UpdateStatus(ctx, j.ID, domain.JobFailed, "queue full")
@@ -157,6 +181,11 @@ func (s *Service) execute(t task) {
 		err = s.operator.StopContainer(ctx, t.ownerID, t.containerID)
 	case domain.OpDeleteContainer:
 		err = s.operator.DeleteContainer(ctx, t.ownerID, t.containerID)
+	case domain.OpCreateContainer:
+		_ = s.store.UpdateStage(ctx, t.jobID, "creating container")
+		err = s.operator.CreateContainer(ctx, t.ownerID, t.containerID, t.spec, func(stage string) {
+			_ = s.store.UpdateStage(ctx, t.jobID, stage)
+		})
 	default:
 		err = fmt.Errorf("unknown job op %q", t.op)
 	}

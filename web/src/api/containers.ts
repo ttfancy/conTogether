@@ -17,16 +17,23 @@ export function getContainer(id: string): Promise<Container> {
   return request<Container>(`/containers/${encodeURIComponent(id)}`)
 }
 
-export function createContainer(input: CreateContainerInput): Promise<Container> {
-  return request<Container>('/containers', {
+// CreateContainerResponse is the container (in "pending" status, no
+// docker_id yet) plus the ID of the job actually doing the Docker-side
+// work — poll getJob(job_id) the same way start/stop/delete already do.
+export interface CreateContainerResponse extends Container {
+  job_id: string
+}
+
+export function createContainer(input: CreateContainerInput): Promise<CreateContainerResponse> {
+  return request<CreateContainerResponse>('/containers', {
     method: 'POST',
     body: JSON.stringify(input),
   })
 }
 
-// Start/stop/delete are all asynchronous on the backend — each submits
-// a job and returns 202 + a Job ID immediately; the caller polls getJob
-// for completion (see useJobPolling).
+// Create/start/stop/delete are all asynchronous on the backend — each
+// submits a job and returns 202 + a Job ID immediately; the caller
+// polls getJob for completion (see waitForJob).
 export function startContainer(id: string): Promise<Job> {
   return request<Job>(`/containers/${encodeURIComponent(id)}/start`, { method: 'POST' })
 }
