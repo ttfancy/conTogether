@@ -134,6 +134,7 @@ func main() {
 	mux.Handle(logServicePath, connectHandler)
 	mux.HandleFunc("GET /ws/logs", wsstream.ServeAppLogs(logger, apiKeys))
 	mux.HandleFunc("GET /ws/containers/{id}/logs", wsstream.ServeContainerLogs(containerSvc, apiKeys))
+	mux.HandleFunc("GET /ws/containers/{id}/exec", wsstream.ServeContainerExec(containerSvc, apiKeys))
 	mux.Handle("/", router)
 
 	// h2c: plain-text HTTP/2, so full (non-Web) gRPC clients work locally

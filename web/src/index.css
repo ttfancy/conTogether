@@ -357,3 +357,18 @@ a:hover {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+.terminal-viewer {
+  background: #0d0e12;
+  border-radius: 8px;
+  padding: 8px;
+  height: 60vh;
+}
+
+/* xterm.js sizes its own canvas from its parent — without this the
+   terminal element collapses to 0 height (it has no intrinsic size of
+   its own) and FitAddon.fit() has nothing to measure. */
+.terminal-viewer .xterm,
+.terminal-viewer .xterm-viewport {
+  height: 100%;
+}

@@ -87,6 +87,7 @@ type fakeDocker struct {
 	mu            sync.Mutex
 	streamContent string
 	streamCalls   []string // dockerIDs StreamLogs was called with
+	execCalls     []string // dockerIDs ExecContainer was called with
 }
 
 func (*fakeDocker) CreateContainer(_ context.Context, spec domain.ContainerSpec) (string, error) {
@@ -102,6 +103,23 @@ func (d *fakeDocker) StreamLogs(_ context.Context, dockerID, _ string) (io.ReadC
 	d.streamCalls = append(d.streamCalls, dockerID)
 	return io.NopCloser(strings.NewReader(d.streamContent)), nil
 }
+
+func (d *fakeDocker) ExecContainer(_ context.Context, dockerID string) (domain.ExecSession, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.execCalls = append(d.execCalls, dockerID)
+	return &fakeExecSession{}, nil
+}
+
+// fakeExecSession is a no-op stand-in — these tests only care whether
+// Exec reaches the Docker client at all (and with the right ownership
+// check), not what a real exec session does once opened.
+type fakeExecSession struct{}
+
+func (*fakeExecSession) Read([]byte) (int, error)  { return 0, io.EOF }
+func (*fakeExecSession) Write(p []byte) (int, error) { return len(p), nil }
+func (*fakeExecSession) Close() error                { return nil }
+func (*fakeExecSession) Resize(context.Context, uint, uint) error { return nil }
 
 func testLogger(t *testing.T) *applog.Manager {
 	t.Helper()
@@ -198,6 +216,55 @@ func TestStreamLogsForbiddenForOtherOwnerNeverReachesDocker(t *testing.T) {
 	defer docker.mu.Unlock()
 	if len(docker.streamCalls) != 0 {
 		t.Fatalf("expected StreamLogs to never reach the docker client, got calls %+v", docker.streamCalls)
+	}
+}
+
+func TestExecReachesDockerClientForOwner(t *testing.T) {
+	svc, _, docker := newTestServiceWithDocker(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "web"})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+
+	session, err := svc.Exec(ctx, "owner-1", c.ID)
+	if err != nil {
+		t.Fatalf("Exec failed: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected a non-nil session")
+	}
+
+	docker.mu.Lock()
+	defer docker.mu.Unlock()
+	if len(docker.execCalls) != 1 || docker.execCalls[0] != c.DockerID {
+		t.Fatalf("ExecContainer calls = %+v, want [%q]", docker.execCalls, c.DockerID)
+	}
+}
+
+// TestExecForbiddenForOtherOwnerEvenWhenPublic is the same
+// authorization boundary as start/stop/delete: Exec grants real control
+// (a shell can do anything), so it must use the strict owner-only check
+// regardless of visibility — unlike GetContainer/StreamLogs, which a
+// public container's visibility does extend to.
+func TestExecForbiddenForOtherOwnerEvenWhenPublic(t *testing.T) {
+	svc, _, docker := newTestServiceWithDocker(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateContainer(ctx, "owner-1", domain.ContainerSpec{Image: "alpine", Name: "web", Visibility: domain.VisibilityPublic})
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+
+	if _, err := svc.Exec(ctx, "owner-2", c.ID); !errors.Is(err, service.ErrForbidden) {
+		t.Fatalf("Exec as different owner on a public container = %v, want ErrForbidden", err)
+	}
+
+	docker.mu.Lock()
+	defer docker.mu.Unlock()
+	if len(docker.execCalls) != 0 {
+		t.Fatalf("expected Exec to never reach the docker client, got calls %+v", docker.execCalls)
 	}
 }
 

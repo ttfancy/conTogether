@@ -251,6 +251,27 @@ make docs
 | DELETE | `/containers/{id}` | Async — returns 202 + Job ID |
 | GET | `/jobs/{jobId}` | Poll job status |
 | POST | `/uploads` | Multipart file upload |
+| WS | `GET /ws/containers/{id}/exec` | Interactive terminal — see below |
+
+## Interactive terminal
+
+`GET /ws/containers/{id}/exec` bridges a WebSocket to a real shell
+(`/bin/sh`, TTY-attached via `docker exec`) inside the container — owner-only,
+regardless of visibility, since a shell is real control, not a read (see
+`service.ContainerService.Exec`'s use of the strict `mustOwnContainer` check,
+the same one start/stop/delete use — a public container's visibility never
+extends to this). The frontend's `/containers/{id}/exec` page
+(`web/src/pages/ContainerExecPage.tsx`) drives it with
+[xterm.js](https://xtermjs.org/).
+
+Wire protocol: binary WS frames carry raw PTY bytes in both directions
+(keystrokes in, terminal output out — a TTY session is a single
+unmultiplexed stream, unlike `StreamLogs`' non-TTY containers); text WS
+frames from the client are JSON resize messages
+(`{"type":"resize","cols":..,"rows":..}`), sent whenever the browser's
+terminal element resizes so full-screen programs (`vim`, `top`, ...) render
+at the right size — the same binary-data/text-control split tools like
+`ttyd` and `gotty` use for the same reason.
 
 ## Multi-protocol log delivery
 

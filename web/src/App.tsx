@@ -4,6 +4,7 @@ import { ToastProvider } from './context/ToastContext'
 import Layout from './components/Layout'
 import ContainersPage from './pages/ContainersPage'
 import ContainerLogsPage from './pages/ContainerLogsPage'
+import ContainerExecPage from './pages/ContainerExecPage'
 import UploadsPage from './pages/UploadsPage'
 import AppLogsPage from './pages/AppLogsPage'
 
@@ -16,6 +17,7 @@ export default function App() {
             <Route element={<Layout />}>
               <Route index element={<ContainersPage />} />
               <Route path="containers/:id/logs" element={<ContainerLogsPage />} />
+              <Route path="containers/:id/exec" element={<ContainerExecPage />} />
               {/* /upload and /app-logs, not /uploads or /logs: those are
                   exact-match backend API paths (POST /uploads, GET/DELETE
                   /logs). container-api's router does exact-path matching,

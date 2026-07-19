@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -94,6 +95,69 @@ func (w *DockerWrapper) StreamLogs(ctx context.Context, dockerID, tail string) (
 		raw.Close()
 	}()
 	return pr, nil
+}
+
+// defaultExecCols/Rows seed the exec session's initial TTY size before
+// the frontend's first real resize message arrives (it can't send one
+// until xterm.js has mounted and measured its container element) —
+// close enough to avoid a jarring reflow, not load-bearing since a
+// resize immediately corrects it.
+const (
+	defaultExecCols = 80
+	defaultExecRows = 24
+)
+
+// ExecContainer starts an interactive shell (/bin/sh, TTY-attached)
+// inside the container and returns a live session bridging stdin/stdout
+// — the interactive-terminal feature's Docker half. Unlike StreamLogs
+// (read-only), this grants real control over the container, which is
+// why service.ContainerService gates it through the strict owner-only
+// check (mustOwnContainer), never the public-readable one.
+func (w *DockerWrapper) ExecContainer(ctx context.Context, dockerID string) (domain.ExecSession, error) {
+	size := [2]uint{defaultExecRows, defaultExecCols}
+	created, err := w.cli.ContainerExecCreate(ctx, dockerID, types.ExecConfig{
+		Cmd:          []string{"/bin/sh"},
+		Tty:          true,
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		ConsoleSize:  &size,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create exec: %w", err)
+	}
+
+	resp, err := w.cli.ContainerExecAttach(ctx, created.ID, types.ExecStartCheck{Tty: true})
+	if err != nil {
+		return nil, fmt.Errorf("attach exec: %w", err)
+	}
+	return &ExecSession{execID: created.ID, resp: resp, cli: w.cli}, nil
+}
+
+// ExecSession is a live, TTY-attached docker exec session: reading
+// yields the shell's combined stdout/stderr (no stdcopy demuxing needed
+// — a TTY session is a single unmultiplexed stream, unlike StreamLogs'
+// non-TTY containers), writing sends keystrokes as stdin.
+type ExecSession struct {
+	execID string
+	resp   types.HijackedResponse
+	cli    *client.Client
+}
+
+func (s *ExecSession) Read(p []byte) (int, error)  { return s.resp.Reader.Read(p) }
+func (s *ExecSession) Write(p []byte) (int, error) { return s.resp.Conn.Write(p) }
+
+func (s *ExecSession) Close() error {
+	s.resp.Close()
+	return nil
+}
+
+// Resize adjusts the exec session's TTY size — called whenever the
+// browser's terminal element resizes, so full-screen TUI programs
+// (vim, top, ...) inside the shell render correctly instead of at
+// whatever size the session happened to start at.
+func (s *ExecSession) Resize(ctx context.Context, cols, rows uint) error {
+	return s.cli.ContainerExecResize(ctx, s.execID, dockercontainer.ResizeOptions{Height: rows, Width: cols})
 }
 
 func (w *DockerWrapper) Close() error { return w.cli.Close() }

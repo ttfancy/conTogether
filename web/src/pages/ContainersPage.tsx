@@ -165,6 +165,7 @@ export default function ContainersPage() {
               <th>Status</th>
               <th>Visibility</th>
               <th>Logs</th>
+              <th>Terminal</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -193,6 +194,13 @@ export default function ContainersPage() {
                 </td>
                 <td>
                   <Link to={`/containers/${c.id}/logs`}>view</Link>
+                </td>
+                <td>
+                  {c.is_owner ? (
+                    <Link to={`/containers/${c.id}/exec`}>open</Link>
+                  ) : (
+                    <span className="muted">owner only</span>
+                  )}
                 </td>
                 <td className="row-actions">
                   {c.is_owner ? (

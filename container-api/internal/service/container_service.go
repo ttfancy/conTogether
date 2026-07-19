@@ -45,6 +45,7 @@ type DockerClient interface {
 	StopContainer(ctx context.Context, dockerID string) error
 	RemoveContainer(ctx context.Context, dockerID string) error
 	StreamLogs(ctx context.Context, dockerID, tail string) (io.ReadCloser, error)
+	ExecContainer(ctx context.Context, dockerID string) (domain.ExecSession, error)
 }
 
 // IDGenerator produces a new unique ID; injected so tests can supply a
@@ -198,6 +199,25 @@ func (s *ContainerService) StreamLogs(ctx context.Context, ownerID, id, tail str
 		return nil, err
 	}
 	return s.docker.StreamLogs(ctx, c.DockerID, tail)
+}
+
+// Exec opens an interactive shell session inside the container — unlike
+// StreamLogs (read-only), this grants real control (an attacker with a
+// shell can do anything the container's process can), so it's gated by
+// the strict owner-only check (mustOwnContainer), never the
+// public-readable GetContainer: visibility grants read access, not
+// control. Not wrapped in withLock either: like StreamLogs, a session
+// can run for as long as the user keeps it open, and holding the
+// per-container lock for that whole time would block every start/stop/
+// delete on the container until they close it — Docker's own exec
+// mechanism already handles a session outliving (or being cut short by)
+// the container's lifecycle safely at the daemon level.
+func (s *ContainerService) Exec(ctx context.Context, ownerID, id string) (domain.ExecSession, error) {
+	c, err := s.mustOwnContainer(ctx, ownerID, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.docker.ExecContainer(ctx, c.DockerID)
 }
 
 func (s *ContainerService) StartContainer(ctx context.Context, ownerID, id string) error {
