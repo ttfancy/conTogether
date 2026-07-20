@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -101,9 +100,9 @@ func (f *fakeContainerService) get(ownerID, id string) (*domain.Container, error
 	return &cp, nil
 }
 
-// getReadable is the loosened read check GetContainer/StreamLogs use:
-// owner, or anyone if the container is public. Returns a copy — see get's
-// comment on why that matters here.
+// getReadable is the loosened read check GetContainer uses: owner, or
+// anyone if the container is public. Returns a copy — see get's comment
+// on why that matters here.
 func (f *fakeContainerService) getReadable(ownerID, id string) (*domain.Container, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -169,13 +168,6 @@ func (f *fakeContainerService) DeleteContainer(_ context.Context, ownerID, id st
 	return nil
 }
 
-func (f *fakeContainerService) StreamLogs(_ context.Context, ownerID, id, _ string) (io.ReadCloser, error) {
-	if _, err := f.getReadable(ownerID, id); err != nil {
-		return nil, err
-	}
-	return io.NopCloser(strings.NewReader("fake log line\n")), nil
-}
-
 type fakeUploader struct{}
 
 func (fakeUploader) Save(_ context.Context, ownerID, filename string, _ io.Reader, visibility domain.Visibility) (*domain.Upload, error) {
@@ -224,7 +216,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		"owner-2-key": "owner-2",
 	}))
 	handler.RegisterRoutes(authGroup,
-		handler.NewContainerHandler(containerSvc, containerSvc, jobSvc),
+		handler.NewContainerHandler(containerSvc, jobSvc),
 		handler.NewUploadHandler(fakeUploader{}),
 		handler.NewJobHandler(jobSvc),
 		handler.NewLogHandler(logger),
@@ -565,32 +557,6 @@ func TestClearLogsRemovesEntries(t *testing.T) {
 		if fields != nil && fields["path"] == "/healthz" {
 			t.Fatalf("expected the /healthz entry to have been cleared, but it's still present: %+v", entries)
 		}
-	}
-}
-
-// TestStreamContainerLogs checks the SSE response shape and that it
-// carries the container's actual log content, ownership-checked like
-// every other container operation.
-func TestStreamContainerLogs(t *testing.T) {
-	router := newTestRouter(t)
-
-	rec := doRequest(router, http.MethodGet, "/containers/ctr-existing/logs/stream", "owner-1-key", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET .../logs/stream = %d, want 200, body=%s", rec.Code, rec.Body.String())
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
-	}
-	if !strings.Contains(rec.Body.String(), "data: fake log line") {
-		t.Fatalf("SSE body = %q, want it to contain the fake container's log line", rec.Body.String())
-	}
-}
-
-func TestStreamContainerLogsForbiddenMapsTo403(t *testing.T) {
-	router := newTestRouter(t)
-	rec := doRequest(router, http.MethodGet, "/containers/ctr-existing/logs/stream", "owner-2-key", nil)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("stream as different owner = %d, want 403, body=%s", rec.Code, rec.Body.String())
 	}
 }
 

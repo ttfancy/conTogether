@@ -155,43 +155,6 @@
                 }
             }
         },
-        "/containers/{id}/logs/stream": {
-            "get": {
-                "security": [
-                    {
-                        "ApiKeyAuth": []
-                    }
-                ],
-                "description": "Server-Sent Events stream of the container's own log output, backfilling `tail` recent lines then following new output as it's written.",
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "containers"
-                ],
-                "summary": "Live-tail a container's stdout/stderr",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Container ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Number of recent lines to backfill (default 100)",
-                        "name": "tail",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK"
-                    }
-                }
-            }
-        },
         "/containers/{id}/start": {
             "post": {
                 "security": [

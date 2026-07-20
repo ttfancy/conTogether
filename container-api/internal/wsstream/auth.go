@@ -1,6 +1,6 @@
 // Package wsstream exposes log data over WebSocket, alongside the REST
-// (internal/handler) and gRPC/Connect (internal/rpc) transports —
-// same underlying data, a third wire protocol.
+// (internal/handler) transport — same underlying data, a second wire
+// protocol.
 package wsstream
 
 import "net/http"

@@ -31,9 +31,9 @@ type logEntryJSON struct {
 
 // ServeAppLogs upgrades to a WebSocket and live-tails container-api's
 // own operational logs — new entries only, from the moment of connect;
-// pair with GET /logs (REST) or LogService.ReadLogs (Connect/gRPC) for
-// history. Gated by any valid API key, not ownership — app logs aren't
-// owned by a particular user, matching the REST endpoint's behavior.
+// pair with GET /logs (REST) for history. Gated by any valid API key,
+// not ownership — app logs aren't owned by a particular user, matching
+// the REST endpoint's behavior.
 func ServeAppLogs(registrar LogRegistrar, authStore middleware.APIKeyStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := authStore.OwnerForKey(apiKeyFromRequest(r)); !ok {

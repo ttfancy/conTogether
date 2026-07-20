@@ -17,7 +17,7 @@ var ErrClosed = errors.New("applog: manager is closed")
 // Manager is container-api's operational log store: asynchronous
 // writes, level/time/substring-filtered reads, clearing, and a handler
 // extension point (RegisterLogHandler) — everything container-api's
-// REST/WebSocket/gRPC log endpoints need, without any external logging
+// REST/WebSocket log endpoints need, without any external logging
 // dependency.
 type Manager struct {
 	queue chan *jsonEntry

@@ -1,7 +1,7 @@
 // Package middleware holds cross-cutting request concerns. Auth/OwnerID
 // deliberately work on plain context.Context rather than *gin.Context:
 // identity resolution (API key -> owner ID) is the same operation
-// whether the request arrived over REST (Gin) or gRPC/Connect, so both
+// whether the request arrived over REST (Gin) or WebSocket, so both
 // transports share this one implementation instead of each inventing
 // its own.
 package middleware
@@ -31,8 +31,8 @@ func (m MapAPIKeyStore) OwnerForKey(key string) (string, bool) {
 }
 
 // WithOwnerID returns a context carrying ownerID, retrievable via
-// OwnerID. Used by both the Gin Auth middleware and the Connect/gRPC
-// auth interceptor (see internal/rpc) — one identity representation,
+// OwnerID. Used by both the Gin Auth middleware and internal/wsstream's
+// WebSocket auth (see wsstream/auth.go) — one identity representation,
 // two transports resolving into it the same way.
 func WithOwnerID(ctx context.Context, ownerID string) context.Context {
 	return context.WithValue(ctx, ownerIDContextKey{}, ownerID)

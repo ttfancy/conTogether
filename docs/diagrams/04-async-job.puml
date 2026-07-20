@@ -47,7 +47,7 @@ note right of JobService
   create with, and its job additionally
   reports a Stage ("pulling image" / "creating
   container") while running — see
-  06-create-container.puml for that flow in
+  03-create-container.puml for that flow in
   full; the queue/worker/poll shape here is
   identical either way.
 end note

@@ -57,7 +57,7 @@ Worker -> Worker: mark job status="done" / "failed" (err message if any)
 Worker -> LogManager: WriteLog("INFO"/"ERROR", job result)
 deactivate Worker
 
-== Client polls for result (same pattern as start/stop/delete, see 07) ==
+== Client polls for result (same pattern as start/stop/delete, see 04) ==
 Client -> ContainerHandler: GET /jobs/{jobId}
 ContainerHandler -> JobService: GetJob(jobId)
 JobService --> ContainerHandler: Job{status, stage, error}
@@ -71,7 +71,7 @@ note right of ContainerHandler
   real time to pull, and a single blocking
   HTTP request isn't how the rest of this API
   handles anything else that's potentially
-  slow — see 07-async-job.puml.
+  slow — see 04-async-job.puml.
 end note
 
 @enduml
