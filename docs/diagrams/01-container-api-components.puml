@@ -44,10 +44,6 @@ package "internal/wsstream" {
   [ServeContainerExec]
 }
 
-package "internal/rpc" {
-  [LogServiceHandler]
-}
-
 package "internal/applog" {
   [Manager] as AppLogManager
 }
@@ -61,7 +57,6 @@ Main --> JobHandler
 Main --> ServeAppLogs
 Main --> ServeContainerLogs
 Main --> ServeContainerExec
-Main --> LogServiceHandler
 
 LoggingMiddleware --> AppLogManager : WriteLog(...)
 
@@ -71,11 +66,10 @@ JobHandler --> JobService
 ServeContainerLogs --> ContainerService : StreamLogs (loosened: owner or public)
 ServeContainerExec --> ContainerService : Exec (strict: owner-only)
 ServeAppLogs --> AppLogManager : RegisterLogHandler (live WS tail)
-LogServiceHandler --> ContainerService : ReadLogs / ClearLogs / StreamContainerLogs\n(same service, gRPC/Connect transport)
 
 ContainerService --> ContainerRepository
 ContainerService --> DockerClientWrapper
-ContainerService --> JobQueue : enqueue long-running ops\n(create/start/stop/delete — see 06, 07)
+ContainerService --> JobQueue : enqueue long-running ops\n(create/start/stop/delete — see 03, 04)
 
 JobService --> JobQueue
 JobQueue --> WorkerPool

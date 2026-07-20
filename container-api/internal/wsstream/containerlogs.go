@@ -14,17 +14,17 @@ import (
 	"contogether/container-api/internal/service"
 )
 
-// ContainerLogStreamer mirrors handler.ContainerLogStreamer and
-// rpc.ContainerLogStreamer — same *service.ContainerService backs all
-// three transports (REST/SSE, gRPC/Connect, WebSocket).
+// ContainerLogStreamer is the one piece of *service.ContainerService
+// this package needs, expressed as an interface so tests can inject a
+// fake instead of a real service+repository+Docker stack.
 type ContainerLogStreamer interface {
 	StreamLogs(ctx context.Context, ownerID, id, tail string) (io.ReadCloser, error)
 }
 
 // ServeContainerLogs upgrades to a WebSocket and live-tails a managed
-// container's stdout/stderr — the WebSocket equivalent of
-// GET /containers/{id}/logs/stream (SSE), and the same ownership check
-// as every other transport that touches a container.
+// container's stdout/stderr, backfilling `tail` recent lines then
+// following new output as it's written; the same ownership check as
+// every other transport that touches a container.
 func ServeContainerLogs(streams ContainerLogStreamer, authStore middleware.APIKeyStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ownerID, ok := authStore.OwnerForKey(apiKeyFromRequest(r))
@@ -82,11 +82,11 @@ func ServeContainerLogs(streams ContainerLogStreamer, authStore middleware.APIKe
 	}
 }
 
-// closeStatusFor maps the same sentinel errors middleware.Error and
-// rpc.toConnectError map, to their closest WebSocket close-status
-// equivalent — the WS close-code enum is coarser than HTTP status codes
-// or gRPC codes, so this is necessarily approximate; the error message
-// itself (sent as the close reason) carries the specific detail.
+// closeStatusFor maps the same sentinel errors middleware.Error maps to
+// HTTP status codes, to their closest WebSocket close-status equivalent
+// — the WS close-code enum is coarser than HTTP status codes, so this
+// is necessarily approximate; the error message itself (sent as the
+// close reason) carries the specific detail.
 func closeStatusFor(err error) websocket.StatusCode {
 	switch {
 	case errors.Is(err, service.ErrNotFound):

@@ -3,7 +3,6 @@ module contogether
 go 1.26.3
 
 require (
-	connectrpc.com/connect v1.20.0
 	github.com/docker/docker v25.0.5+incompatible
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-migrate/migrate/v4 v4.17.1
@@ -12,9 +11,10 @@ require (
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
 	github.com/swaggo/swag v1.16.6
-	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.54.0
 )
+
+require google.golang.org/protobuf v1.36.11 // indirect
 
 require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
@@ -84,7 +84,7 @@ require (
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
-	golang.org/x/net v0.57.0
+	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

@@ -219,30 +219,6 @@ paths:
       summary: Get a container
       tags:
       - containers
-  /containers/{id}/logs/stream:
-    get:
-      description: Server-Sent Events stream of the container's own log output, backfilling
-        `tail` recent lines then following new output as it's written.
-      parameters:
-      - description: Container ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Number of recent lines to backfill (default 100)
-        in: query
-        name: tail
-        type: string
-      produces:
-      - text/event-stream
-      responses:
-        "200":
-          description: OK
-      security:
-      - ApiKeyAuth: []
-      summary: Live-tail a container's stdout/stderr
-      tags:
-      - containers
   /containers/{id}/start:
     post:
       description: Submits a start job and returns immediately; poll GET /jobs/{jobId}

@@ -19,7 +19,6 @@ func RegisterRoutes(router gin.IRouter, containers *ContainerHandler, uploads *U
 	router.POST("/containers/:id/start", jobs.StartContainer)
 	router.POST("/containers/:id/stop", jobs.StopContainer)
 	router.DELETE("/containers/:id", jobs.DeleteContainer)
-	router.GET("/containers/:id/logs/stream", containers.StreamLogs)
 	router.PUT("/containers/:id/visibility", containers.SetVisibility)
 
 	router.GET("/jobs/:jobId", jobs.GetJob)
