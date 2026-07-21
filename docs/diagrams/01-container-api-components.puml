@@ -19,23 +19,26 @@ package "internal/handler" {
 
 package "internal/service" {
   [ContainerService]
-  [UploadService]
-  [JobService]
+  interface ContainerRepository
+}
+
+package "internal/upload" {
+  [Service] as UploadService
+}
+
+package "internal/job" {
+  [Service] as JobService
+  [JobQueue]
+  [WorkerPool]
 }
 
 package "internal/repository" {
-  interface ContainerRepository
   [SQLiteContainerRepo]
   [PostgresContainerRepo]
 }
 
 package "internal/container" {
-  [DockerClientWrapper]
-}
-
-package "internal/job" {
-  [JobQueue]
-  [WorkerPool]
+  [DockerWrapper]
 }
 
 package "internal/wsstream" {
@@ -61,15 +64,15 @@ Main --> ServeContainerExec
 LoggingMiddleware --> AppLogManager : WriteLog(...)
 
 ContainerHandler --> ContainerService
+ContainerHandler --> JobService : SubmitCreate\n(async create — see 03)
 UploadHandler --> UploadService
-JobHandler --> JobService
+JobHandler --> JobService : Submit\n(async start/stop/delete — see 04)
 ServeContainerLogs --> ContainerService : StreamLogs (loosened: owner or public)
 ServeContainerExec --> ContainerService : Exec (strict: owner-only)
 ServeAppLogs --> AppLogManager : RegisterLogHandler (live WS tail)
 
 ContainerService --> ContainerRepository
-ContainerService --> DockerClientWrapper
-ContainerService --> JobQueue : enqueue long-running ops\n(create/start/stop/delete — see 03, 04)
+ContainerService --> DockerWrapper
 
 JobService --> JobQueue
 JobQueue --> WorkerPool

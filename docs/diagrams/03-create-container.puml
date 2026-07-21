@@ -7,7 +7,7 @@ participant ContainerService
 participant ContainerRepository
 participant JobService
 participant "job.Service worker" as Worker
-participant DockerClientWrapper
+participant DockerWrapper
 participant "applog.Manager" as LogManager
 
 Client -> ContainerHandler: POST /containers {image, name, ...}
@@ -31,16 +31,16 @@ activate Worker
 Worker -> Worker: mark job status="running", stage="creating container"
 Worker -> ContainerService: CreateContainer(ctx, ownerID, containerID, spec, reportStage)
 activate ContainerService
-ContainerService -> DockerClientWrapper: CreateContainer(spec, onPulling)
-activate DockerClientWrapper
-DockerClientWrapper -> DockerClientWrapper: docker SDK ContainerCreate()
+ContainerService -> DockerWrapper: CreateContainer(spec, onPulling)
+activate DockerWrapper
+DockerWrapper -> DockerWrapper: docker SDK ContainerCreate()
 alt image not found locally
-  DockerClientWrapper -> Worker: onPulling() --> reportStage("pulling image")
+  DockerWrapper -> Worker: onPulling() --> reportStage("pulling image")
   Worker -> Worker: update job stage="pulling image"
-  DockerClientWrapper -> DockerClientWrapper: ImagePull(image), then retry ContainerCreate()
+  DockerWrapper -> DockerWrapper: ImagePull(image), then retry ContainerCreate()
 end
-DockerClientWrapper --> ContainerService: dockerID (or error)
-deactivate DockerClientWrapper
+DockerWrapper --> ContainerService: dockerID (or error)
+deactivate DockerWrapper
 
 alt create succeeded
   ContainerService -> ContainerRepository: SetDockerID(containerID, dockerID)

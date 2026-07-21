@@ -5,7 +5,7 @@ actor "Client A" as A
 actor "Client B" as B
 participant ContainerService
 participant "Per-Container Lock\n(in-process sync.Mutex,\none per container ID —\nno DB-level locking)" as Lock
-participant DockerClientWrapper
+participant DockerWrapper
 participant "applog.Manager" as LogManager
 
 A -> ContainerService: DeleteContainer(id)
@@ -20,8 +20,8 @@ activate ContainerService #LightGray
 ContainerService -> Lock: Acquire(id)
 note right: blocks until A's operation\nreleases the lock for this container ID
 
-ContainerService -> DockerClientWrapper: ContainerRemove(id)
-DockerClientWrapper --> ContainerService: ok
+ContainerService -> DockerWrapper: RemoveContainer(id)
+DockerWrapper --> ContainerService: ok
 ContainerService -> ContainerService: repo.Delete(id)
 ContainerService -> Lock: Release(id)
 deactivate Lock
@@ -34,8 +34,8 @@ ContainerService -> ContainerService: mustOwnContainer(ownerID, id)\n(re-reads t
 alt container no longer exists
   ContainerService --> B: 404 Not Found\n(service.ErrNotFound; NOT 409 — that\nstatus is reserved for the create-time\nduplicate-name case, domain.ErrContainerNameConflict)
 else exists
-  ContainerService -> DockerClientWrapper: ContainerStart(id)
-  DockerClientWrapper --> ContainerService: ok
+  ContainerService -> DockerWrapper: StartContainer(id)
+  DockerWrapper --> ContainerService: ok
   ContainerService --> B: 200 OK
 end
 ContainerService -> Lock: Release(id)
